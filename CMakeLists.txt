@@ -94,8 +94,6 @@ option(ENABLE_COVERAGE "Build code coverage report from tests" OFF)
 option(ENABLE_COMMON_TARGETS "Define common custom target names such as 'doc' or 'uninstall', may cause conflicts when using add_subdirectory() to build this project" ON)
 option(ENABLE_DS_MONGO "Enable MongoDB datastore plugin" OFF)
 option(ENABLE_DS_REDIS "Enable Redis datastore plugin" OFF)
-option(ENABLE_BINARY_DS "Enable binary datastore format (PostgreSQL jsonb-inspired)" ON)
-option(KEEP_JSON_BACKUP "Keep JSON files alongside binary format for compatibility" ON)
 option(ENABLE_SYSREPOCTL "Build binary tool 'sysrepoctl'" ON)
 option(ENABLE_SYSREPOCFG "Build binary tool 'sysrepocfg'" ON)
 option(ENABLE_SYSREPO_PLUGIND "Build binary daemon 'sysrepo-plugind'" ON)
@@ -266,11 +264,6 @@ set(LIB_SRC
     src/plugins/ds_json.c
     src/plugins/ntf_json.c
     src/plugins/common_json.c
-    src/plugins/common_srbin.c
-    src/plugins/srbin_serialize.c
-    src/plugins/srbin_deserialize.c
-    src/plugins/srbin_index.c
-    src/srbin_shm.c
     src/utils/values.c
     src/utils/xpath.c
     src/utils/error_format.c
@@ -485,20 +478,6 @@ if(ENABLE_DS_REDIS)
     endif()
 else()
     message(STATUS "Redis datastore plugin disabled")
-endif()
-
-# binary format support (PostgreSQL jsonb-inspired)
-if(ENABLE_BINARY_DS)
-    set(SR_ENABLED_BINARY_DS 1)
-    message(STATUS "Binary datastore format enabled.")
-    if(KEEP_JSON_BACKUP)
-        set(SR_KEEP_JSON_BACKUP 1)
-        message(STATUS "Keeping JSON files as backup.")
-    else()
-        message(STATUS "JSON backup disabled (binary-only mode).")
-    endif()
-else()
-    message(STATUS "Binary datastore format disabled")
 endif()
 
 # common database utility functions - optional

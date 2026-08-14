@@ -165,12 +165,6 @@
 /** compile Redis datastore plugin if libhiredis is available */
 #cmakedefine SR_ENABLED_DS_PLG_REDIS
 
-/** compile binary datastore format support (PostgreSQL jsonb-inspired) */
-#cmakedefine SR_ENABLED_BINARY_DS
-
-/** keep JSON files alongside binary format */
-#cmakedefine SR_KEEP_JSON_BACKUP
-
 /** MongoDB database to authenticate against */
 #define SR_DS_PLG_MONGO_AUTHSOURCE    "@MONGO_AUTHSOURCE@"
 

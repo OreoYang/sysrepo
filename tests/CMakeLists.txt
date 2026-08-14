@@ -57,7 +57,7 @@ if(ENABLE_TESTS)
     # lists of all the tests
     set(tests test_modules test_context_change test_validation test_edit test_candidate test_oper_pull test_oper_push
         test_lock test_apply_changes test_copy_config test_rpc_action test_notif test_get test_process
-        test_multi_connection test_nacm test_rotation test_sub_notif test_plugin test_rwlock test_srbin_format)
+        test_multi_connection test_nacm test_rotation test_sub_notif test_plugin test_rwlock)
 
     foreach(test_name IN LISTS tests)
         # link srobj to get the number of DS plugins available
@@ -98,26 +98,6 @@ endif()
 # (this number can fluctuate depending on the presence of optional libraries)
 add_executable(sr_perf ${CMAKE_CURRENT_SOURCE_DIR}/perf.c $<TARGET_OBJECTS:srobj>)
 target_link_libraries(sr_perf sysrepo)
-
-# srbin_perf benchmark binary for binary format performance testing
-add_executable(srbin_perf ${CMAKE_CURRENT_SOURCE_DIR}/test_srbin_perf.c $<TARGET_OBJECTS:srobj>)
-target_link_libraries(srbin_perf sysrepo)
-
-# test_olt_perf for OLT config performance testing
-add_executable(test_olt_perf ${CMAKE_CURRENT_SOURCE_DIR}/test_olt_perf.c $<TARGET_OBJECTS:srobj>)
-target_link_libraries(test_olt_perf sysrepo)
-
-# test_olt_json_perf for OLT config JSON performance testing
-add_executable(test_olt_json_perf ${CMAKE_CURRENT_SOURCE_DIR}/test_olt_json_perf.c $<TARGET_OBJECTS:srobj>)
-target_link_libraries(test_olt_json_perf sysrepo)
-
-# test_olt_real_perf for OLT config real performance testing (JSON vs Binary)
-add_executable(test_olt_real_perf ${CMAKE_CURRENT_SOURCE_DIR}/test_olt_real_perf.c $<TARGET_OBJECTS:srobj>)
-target_link_libraries(test_olt_real_perf sysrepo)
-
-# test_simple_perf for simple generated data performance testing
-add_executable(test_simple_perf ${CMAKE_CURRENT_SOURCE_DIR}/test_simple_perf.c $<TARGET_OBJECTS:srobj>)
-target_link_libraries(test_simple_perf sysrepo)
 
 # valgrind tests
 if(ENABLE_VALGRIND_TESTS)

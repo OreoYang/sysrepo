@@ -38,20 +38,12 @@
 #include <libyang/libyang.h>
 
 #include "common_json.h"
-#include "common_srbin.h"
-#include "srbin_deserialize.h"
 #include "sysrepo.h"
 
 #define srpds_name "JSON DS file"  /**< plugin name */
 
 static sr_error_info_t *srpds_json_load(const struct lys_module *mod, sr_datastore_t ds, sr_cid_t cid, uint32_t sid,
         const char **xpaths, uint32_t xpath_count, void *plg_data, struct lyd_node **mod_data);
-
-static sr_error_info_t *srpds_json_load_binary(const struct lys_module *mod, sr_datastore_t ds, int fd,
-        struct lyd_node **mod_data);
-
-static sr_error_info_t *srpds_json_load_json(const struct lys_module *mod, sr_datastore_t ds, int fd, uint32_t parse_opts,
-        struct lyd_node **mod_data);
 
 static sr_error_info_t *srpds_json_access_get(const struct lys_module *mod, sr_datastore_t ds, void *plg_data,
         char **owner, char **group, mode_t *perm);
@@ -444,9 +436,8 @@ srpds_json_load(const struct lys_module *mod, sr_datastore_t ds, sr_cid_t cid, u
         uint32_t UNUSED(xpath_count), void *UNUSED(plg_data), struct lyd_node **mod_data)
 {
     sr_error_info_t *err_info = NULL;
-    int fd = -1, bin_fd = -1;
+    int fd = -1;
     char *path = NULL, *bck_path = NULL;
-    char *bin_path = NULL;
     uint32_t parse_opts;
 
     *mod_data = NULL;
@@ -462,23 +453,7 @@ srpds_json_load(const struct lys_module *mod, sr_datastore_t ds, sr_cid_t cid, u
         }
     }
 
-    /* Check for binary format file first (for fast read) */
-    if (srbf_get_path(mod->name, ds, &bin_path) == 0) {
-        bin_fd = srpjson_open(srpds_name, bin_path, O_RDONLY, 0);
-        if (bin_fd >= 0) {
-            /* Binary file exists - use it for fast loading */
-            if (srbf_is_binary_file(bin_fd)) {
-                err_info = srpds_json_load_binary(mod, ds, bin_fd, mod_data);
-                close(bin_fd);
-                free(bin_path);
-                goto cleanup;
-            }
-            close(bin_fd);
-        }
-        free(bin_path);
-    }
-
-    /* Fall back to JSON file */
+    /* open fd */
     fd = srpjson_open(srpds_name, path, O_RDONLY, 0);
     if (fd == -1) {
         if (errno == ENOENT) {
@@ -515,8 +490,11 @@ srpds_json_load(const struct lys_module *mod, sr_datastore_t ds, sr_cid_t cid, u
         parse_opts |= LYD_PARSE_WHEN_TRUE | LYD_PARSE_NO_NEW;
     }
 
-    /* load the data from JSON */
-    err_info = srpds_json_load_json(mod, ds, fd, parse_opts, mod_data);
+    /* load the data, must succeed */
+    if (lyd_parse_data_fd(mod->ctx, fd, LYD_JSON, parse_opts, 0, mod_data)) {
+        err_info = srpjson_log_err_ly(srpds_name, mod->ctx);
+        goto cleanup;
+    }
 
 cleanup:
     if (fd > -1) {
@@ -525,52 +503,6 @@ cleanup:
     free(path);
     free(bck_path);
     return err_info;
-}
-
-/**
- * @brief Load data from binary format (SRBF)
- *
- * This function loads data from the binary format for fast reads.
- * It uses memory mapping for efficient access.
- */
-static sr_error_info_t *
-srpds_json_load_binary(const struct lys_module *mod, sr_datastore_t UNUSED(ds), int fd,
-        struct lyd_node **mod_data)
-{
-    /* Use the binary deserializer */
-    if (srbf_deserialize_tree(fd, mod->ctx, mod, mod_data) < 0) {
-        srplg_log_errinfo(NULL, srpds_name, NULL, SR_ERR_INTERNAL,
-                "Failed to deserialize binary data for module \"%s\".", mod->name);
-        return srpjson_log_err_ly(srpds_name, mod->ctx);
-    }
-
-    return NULL;
-}
-
-/**
- * @brief Load data from JSON format (legacy)
- *
- * This function loads data from the JSON format and optionally
- * migrates it to binary format for future fast reads.
- */
-static sr_error_info_t *
-srpds_json_load_json(const struct lys_module *mod, sr_datastore_t UNUSED(ds), int fd, uint32_t parse_opts,
-        struct lyd_node **mod_data)
-{
-    /* load the data from JSON, must succeed */
-    if (lyd_parse_data_fd(mod->ctx, fd, LYD_JSON, parse_opts, 0, mod_data)) {
-        return srpjson_log_err_ly(srpds_name, mod->ctx);
-    }
-
-#ifdef SRBIN_ENABLED
-#ifdef SRBIN_KEEP_JSON
-    /* Auto-migrate to binary format in background */
-    /* Note: In production, this should be done asynchronously */
-    /* For now, we skip auto-migration to keep things simple */
-#endif
-#endif
-
-    return NULL;
 }
 
 static sr_error_info_t *
