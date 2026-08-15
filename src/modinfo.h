@@ -270,12 +270,19 @@ sr_error_info_t *sr_modinfo_consolidate(struct sr_mod_info_s *mod_info, sr_lock_
  *
  * @param[in] mod_info Mod info to use.
  * @param[in] mod_state Bitmask of state flags, module with at least one matching bit will be validated.
+ * @param[in] diff_is_complete Whether ::sr_mod_info_s.notify_diff describes every change made to the data since
+ * they were last known to be valid. Only then may the incremental validator be used, and only if it is enabled.
  * @param[in] finish_diff Whether to update diff with possible changes caused by validation.
  * @param[in,out] val_err_info Validation error info to add validation errors to.
  * @return err_info, NULL on success.
  */
-sr_error_info_t *sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int finish_diff,
-        sr_error_info_t **val_err_info);
+/**
+ * @brief Log the incremental validation counters of the process, if there are any.
+ */
+void sr_validate_incr_stats_log(void);
+
+sr_error_info_t *sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff_is_complete,
+        int finish_diff, sr_error_info_t **val_err_info);
 
 /**
  * @brief Add default values into data for modules in mod info.

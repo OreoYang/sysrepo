@@ -214,6 +214,34 @@ sr_error_info_t *sr_lyd_validate_module(struct lyd_node **data, const struct lys
         struct lyd_node **diff);
 
 /**
+ * @brief Validate data of a single module, revalidating only what @p edit_diff could have invalidated.
+ *
+ * Falls back to a full validation of the module whenever the diff cannot be analysed, so the result is always
+ * the same as ::sr_lyd_validate_module().
+ *
+ * @param[in,out] data Data to validate.
+ * @param[in] mod Module to use.
+ * @param[in] edit_diff Diff of the change that produced @p data.
+ * @param[in] options Validate options.
+ * @param[out] diff Optional generated diff.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *sr_lyd_validate_module_incr(struct lyd_node **data, const struct lys_module *mod,
+        const struct lyd_node *edit_diff, uint32_t options, struct lyd_node **diff);
+
+/**
+ * @brief Finish validation of data of a single module, revalidating only what @p edit_diff could have invalidated.
+ *
+ * @param[in] data Data to validate.
+ * @param[in] mod Module to use.
+ * @param[in] edit_diff Diff of the change that produced @p data.
+ * @param[in] options Validate options.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *sr_lyd_validate_module_incr_final(struct lyd_node *data, const struct lys_module *mod,
+        const struct lyd_node *edit_diff, uint32_t options);
+
+/**
  * @brief Finish validation of data of a single module.
  *
  * @param[in] data Data to validate.

@@ -597,6 +597,53 @@ cleanup:
 }
 
 sr_error_info_t *
+sr_lyd_validate_module_incr(struct lyd_node **data, const struct lys_module *mod, const struct lyd_node *edit_diff,
+        uint32_t options, struct lyd_node **diff)
+{
+    sr_error_info_t *err_info = NULL;
+    uint32_t temp_lo = LY_LOSTORE;
+
+    ly_temp_log_options(&temp_lo);
+
+    if (lyd_validate_module_incr(data, mod, edit_diff, options, diff)) {
+        sr_errinfo_new_ly(&err_info, mod->ctx, NULL, SR_ERR_VALIDATION_FAILED);
+        goto cleanup;
+    }
+
+cleanup:
+    ly_temp_log_options(NULL);
+    return err_info;
+}
+
+sr_error_info_t *
+sr_lyd_validate_module_incr_final(struct lyd_node *data, const struct lys_module *mod, const struct lyd_node *edit_diff,
+        uint32_t options)
+{
+    sr_error_info_t *err_info = NULL;
+    uint32_t temp_lo = LY_LOSTORE;
+    const struct ly_err_item *e;
+
+    ly_temp_log_options(&temp_lo);
+
+    /* clear any previous errors and warnings */
+    ly_err_clean(mod->ctx, NULL);
+
+    if (lyd_validate_module_incr_final(data, mod, edit_diff, options)) {
+        sr_errinfo_new_ly(&err_info, mod->ctx, data, SR_ERR_VALIDATION_FAILED);
+        goto cleanup;
+    }
+
+    /* print any warnings (such as about obsolete data being instantiated) */
+    for (e = ly_err_first(mod->ctx); e; e = e->next) {
+        SR_LOG_WRN("%s", e->msg);
+    }
+
+cleanup:
+    ly_temp_log_options(NULL);
+    return err_info;
+}
+
+sr_error_info_t *
 sr_lyd_validate_module_final(struct lyd_node *data, const struct lys_module *mod, uint32_t options)
 {
     sr_error_info_t *err_info = NULL;

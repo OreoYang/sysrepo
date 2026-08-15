@@ -3353,14 +3353,50 @@ cleanup:
     return err_info;
 }
 
+/**
+ * @brief Whether the incremental validator may be used for this change.
+ *
+ * Off unless SR_VALIDATE_INCREMENTAL says otherwise.
+ */
+static int
+sr_modinfo_validate_incr(const struct sr_mod_info_s *mod_info, int diff_is_complete, int finish_diff)
+{
+    static int enabled = -1;
+
+    if (enabled == -1) {
+        const char *env = getenv("SR_VALIDATE_INCREMENTAL");
+
+        enabled = env && (env[0] == '1');
+    }
+
+    return enabled && diff_is_complete && finish_diff && mod_info->notify_diff && SR_IS_CONVENTIONAL_DS(mod_info->ds);
+}
+
+void
+sr_validate_incr_stats_log(void)
+{
+    uint64_t calls = 0, fallbacks = 0;
+
+    /* process totals: sysrepo drops the context on every schema change, per-context counters would not survive */
+    lyd_validate_incr_stats(NULL, &calls, &fallbacks);
+    if (!calls) {
+        return;
+    }
+
+    /* the fallback rate decides whether the incremental validator is actually doing anything */
+    SR_LOG_INF("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%).", calls, fallbacks,
+            (100.0 * (double)fallbacks) / (double)calls);
+}
+
 sr_error_info_t *
-sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int finish_diff, sr_error_info_t **val_err_info)
+sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff_is_complete, int finish_diff,
+        sr_error_info_t **val_err_info)
 {
     sr_error_info_t *err_info = NULL, *tmp_err;
     struct sr_mod_info_mod_s *mod;
     struct lyd_node *diff = NULL, *iter;
     uint32_t i;
-    int val_opts;
+    int val_opts, incr;
 
     assert(!mod_info->data_cached);
     assert(SR_IS_CONVENTIONAL_DS(mod_info->ds) || !finish_diff);
@@ -3371,12 +3407,21 @@ sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int fini
     } else {
         val_opts = LYD_VALIDATE_OPERATIONAL | LYD_VALIDATE_NO_DEFAULTS | LYD_VALIDATE_MULTI_ERROR;
     }
+    incr = sr_modinfo_validate_incr(mod_info, diff_is_complete, finish_diff);
+
     for (i = 0; i < mod_info->mod_count; ++i) {
         mod = &mod_info->mods[i];
         if (mod->state & mod_state) {
             /* validate this module */
-            if ((tmp_err = sr_lyd_validate_module(&mod_info->data, mod->ly_mod, val_opts | LYD_VALIDATE_NOT_FINAL,
-                    finish_diff ? &diff : NULL))) {
+            if (incr) {
+                /* re-read the diff every time, merging the validation diff into it can move its first sibling */
+                tmp_err = sr_lyd_validate_module_incr(&mod_info->data, mod->ly_mod, mod_info->notify_diff,
+                        val_opts | LYD_VALIDATE_NOT_FINAL, &diff);
+            } else {
+                tmp_err = sr_lyd_validate_module(&mod_info->data, mod->ly_mod, val_opts | LYD_VALIDATE_NOT_FINAL,
+                        finish_diff ? &diff : NULL);
+            }
+            if (tmp_err) {
                 sr_errinfo_merge(val_err_info, tmp_err);
             }
 
@@ -3410,7 +3455,12 @@ sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int fini
     for (i = 0; i < mod_info->mod_count; ++i) {
         mod = &mod_info->mods[i];
         if (mod->state & mod_state) {
-            if ((tmp_err = sr_lyd_validate_module_final(mod_info->data, mod->ly_mod, val_opts))) {
+            if (incr) {
+                tmp_err = sr_lyd_validate_module_incr_final(mod_info->data, mod->ly_mod, mod_info->notify_diff, val_opts);
+            } else {
+                tmp_err = sr_lyd_validate_module_final(mod_info->data, mod->ly_mod, val_opts);
+            }
+            if (tmp_err) {
                 sr_errinfo_merge(val_err_info, tmp_err);
             }
         }
@@ -3822,8 +3872,9 @@ sr_modinfo_change_notify_update(struct sr_mod_info_s *mod_info, sr_session_ctx_t
                 goto cleanup;
             }
 
-            /* validate */
-            if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, err_info2))) {
+            /* validate; the data were validated before the "update" event and the new diff describes every
+             * change the updated edit made to them since */
+            if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, 1, err_info2))) {
                 goto cleanup;
             }
             break;
