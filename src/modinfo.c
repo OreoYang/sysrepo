@@ -3367,6 +3367,9 @@ sr_modinfo_validate_incr(const struct sr_mod_info_s *mod_info, int diff_is_compl
         const char *env = getenv("SR_VALIDATE_INCREMENTAL");
 
         enabled = env && (env[0] == '1');
+        if (enabled) {
+            SR_LOG_WRN("Incremental YANG validation is enabled (SR_VALIDATE_INCREMENTAL=1).");
+        }
     }
 
     return enabled && diff_is_complete && finish_diff && mod_info->notify_diff && SR_IS_CONVENTIONAL_DS(mod_info->ds);
@@ -3384,7 +3387,7 @@ sr_validate_incr_stats_log(void)
     }
 
     /* the fallback rate decides whether the incremental validator is actually doing anything */
-    SR_LOG_INF("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%).", calls, fallbacks,
+    SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%).", calls, fallbacks,
             (100.0 * (double)fallbacks) / (double)calls);
 }
 
