@@ -1,0 +1,28 @@
+module incr-c {
+    namespace urn:tests:incr-c;
+    prefix c;
+    yang-version 1.1;
+
+    import incr-a { prefix a; }
+    import incr-b { prefix b; }
+
+    container c-refs {
+        list c-ref {
+            key name;
+            leaf name { type string; }
+            leaf ifname { type leafref { path "/a:ifs/a:if/a:name"; } }
+            leaf addr-id {
+                type leafref { path "/a:ifs/a:if[a:name = current()/../ifname]/b:b-addr/b:id"; }
+            }
+            leaf fast {
+                type string;
+                must "/a:ifs/a:if[a:name = current()/../ifname]/b:b-cfg/b:speed >= 1000";
+            }
+            /* fails once the default m1 case of the interface is replaced */
+            leaf m1need {
+                type string;
+                must "/a:ifs/a:if[a:name = current()/../ifname]/b:b-cfg/b:m1-val = 1";
+            }
+        }
+    }
+}

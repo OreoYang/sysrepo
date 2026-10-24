@@ -1,0 +1,47 @@
+module incr-b {
+    namespace urn:tests:incr-b;
+    prefix b;
+    yang-version 1.1;
+
+    import incr-a { prefix a; }
+
+    augment "/a:ifs/a:if" {
+        container b-cfg {
+            when "derived-from-or-self(../a:type, 'a:eth')";
+            leaf speed { type uint32; default 100; }
+            leaf mtu { type uint32; must "../speed <= ."; }
+            /* creating the m2 case makes the validation delete the default m1 case */
+            choice mode {
+                default m1;
+                case m1 { leaf m1-val { type uint32; default 1; } }
+                case m2 { leaf m2-val { type uint32; } }
+            }
+        }
+        /* a leafref of one interface into the when-guarded container of another one */
+        leaf peer-speed { type leafref { path "/a:ifs/a:if/b:b-cfg/b:speed"; } }
+        list b-addr {
+            key id;
+            unique ip;
+            leaf id { type uint32; }
+            leaf ip { type string; }
+        }
+    }
+
+    augment "/a:ifs/a:if" {
+        when "derived-from-or-self(a:type, 'a:ani')";
+        container b-ani { leaf serial { type string; } }
+    }
+
+    /* the rule lives in this module, the data it reads lives in incr-a */
+    container b-top {
+        list b-chk {
+            key name;
+            leaf name { type string; }
+            leaf ifname { type leafref { path "/a:ifs/a:if/a:name"; } }
+            leaf need {
+                type string;
+                must "derived-from-or-self(/a:ifs/a:if[a:name = current()/../ifname]/a:type, 'a:eth')";
+            }
+        }
+    }
+}
