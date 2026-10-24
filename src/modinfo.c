@@ -3378,17 +3378,19 @@ sr_modinfo_validate_incr(const struct sr_mod_info_s *mod_info, int diff_is_compl
 void
 sr_validate_incr_stats_log(void)
 {
-    uint64_t calls = 0, fallbacks = 0;
+    uint64_t calls = 0, fallbacks = 0, late = 0;
 
     /* process totals: sysrepo drops the context on every schema change, per-context counters would not survive */
     lyd_validate_incr_stats(NULL, &calls, &fallbacks);
+    lyd_validate_incr_late_stats(NULL, &late);
     if (!calls) {
         return;
     }
 
-    /* the fallback rate decides whether the incremental validator is actually doing anything */
-    SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%).", calls, fallbacks,
-            (100.0 * (double)fallbacks) / (double)calls);
+    /* the fallback rate decides whether the incremental validator is actually doing anything, the late ones are
+     * a rule that deletes data on most edits */
+    SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%), %" PRIu64 " late.", calls,
+            fallbacks, (100.0 * (double)fallbacks) / (double)calls, late);
 }
 
 sr_error_info_t *
