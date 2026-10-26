@@ -281,6 +281,11 @@ sr_error_info_t *sr_modinfo_consolidate(struct sr_mod_info_s *mod_info, sr_lock_
  */
 void sr_validate_incr_stats_log(void);
 
+/**
+ * @brief Log once per process whether the incremental validator is compiled in.
+ */
+void sr_validate_incr_status_log(void);
+
 sr_error_info_t *sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff_is_complete,
         int finish_diff, sr_error_info_t **val_err_info);
 

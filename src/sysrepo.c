@@ -308,6 +308,7 @@ sr_connect(const sr_conn_options_t opts, sr_conn_ctx_t **conn_p)
     }
 
     SR_LOG_INF("Connection %" PRIu32 " created.", conn->cid);
+    sr_validate_incr_status_log();
 
 cleanup_unlock:
     /* CREATE UNLOCK */

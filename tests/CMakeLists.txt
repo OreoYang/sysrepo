@@ -94,21 +94,6 @@ if(ENABLE_TESTS)
     endforeach()
 endif()
 
-# the same augment test again with the incremental validator on, so both validators must give the same answers
-if(ENABLE_TESTS)
-    add_test(NAME test_validation_incr_on COMMAND $<TARGET_FILE:test_validation_incr>)
-    set_property(TEST test_validation_incr_on APPEND PROPERTY ENVIRONMENT
-        "MALLOC_CHECK_=3"
-        "SYSREPO_REPOSITORY_PATH=${PROJECT_BINARY_DIR}/test_repositories/test_validation_incr_on"
-        "SYSREPO_SHM_PREFIX=_tests_sr_test_validation_incr_on"
-        "SR_ENV_RUN_TESTS=1"
-        "SR_VALIDATE_INCREMENTAL=1"
-    )
-    if(${CMAKE_VERSION} VERSION_GREATER "3.7")
-        set_tests_properties(test_validation_incr_on PROPERTIES FIXTURES_REQUIRED tests_cleanup)
-    endif()
-endif()
-
 # sr_perf benchmark binary
 if(ENABLE_PERF_TESTS)
     add_executable(sr_perf ${CMAKE_CURRENT_SOURCE_DIR}/perf.c)

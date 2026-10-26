@@ -1,7 +1,7 @@
 /**
  * @file test_validation_incr.c
- * @brief end to end test of edits over augmented modules, meant to be run with and without
- * SR_VALIDATE_INCREMENTAL=1 (see tests/CMakeLists.txt) so that both validators must give the same answers
+ * @brief end to end test of edits over augmented modules, meant to be run with the incremental validator on (the
+ * default) and off (cmake -DENABLE_VALIDATE_INCREMENTAL=OFF) so that both validators must give the same answers
  *
  * Module incr-b augments incr-a and carries a rule that reads incr-a, incr-c reads both, so an edit of one module
  * can be rejected by a rule of another one.

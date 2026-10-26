@@ -3356,23 +3356,36 @@ cleanup:
 /**
  * @brief Whether the incremental validator may be used for this change.
  *
- * Off unless SR_VALIDATE_INCREMENTAL says otherwise.
+ * Decided at build time, cmake -DENABLE_VALIDATE_INCREMENTAL=OFF turns it off (on by default).
  */
 static int
 sr_modinfo_validate_incr(const struct sr_mod_info_s *mod_info, int diff_is_complete, int finish_diff)
 {
-    static int enabled = -1;
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    return diff_is_complete && finish_diff && mod_info->notify_diff && SR_IS_CONVENTIONAL_DS(mod_info->ds);
+#else
+    (void)mod_info;
+    (void)diff_is_complete;
+    (void)finish_diff;
 
-    if (enabled == -1) {
-        const char *env = getenv("SR_VALIDATE_INCREMENTAL");
+    return 0;
+#endif
+}
 
-        enabled = env && (env[0] == '1');
-        if (enabled) {
-            SR_LOG_WRN("Incremental YANG validation is enabled (SR_VALIDATE_INCREMENTAL=1).");
-        }
+void
+sr_validate_incr_status_log(void)
+{
+    static int logged;
+
+    /* once per process, it is the only way to tell from the logs whether this build uses the incremental validator */
+    if (__sync_lock_test_and_set(&logged, 1)) {
+        return;
     }
-
-    return enabled && diff_is_complete && finish_diff && mod_info->notify_diff && SR_IS_CONVENTIONAL_DS(mod_info->ds);
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    SR_LOG_WRN("Incremental YANG validation: compiled in (ENABLE_VALIDATE_INCREMENTAL=ON).");
+#else
+    SR_LOG_WRN("Incremental YANG validation: not compiled in (ENABLE_VALIDATE_INCREMENTAL=OFF).");
+#endif
 }
 
 void
@@ -3388,9 +3401,13 @@ sr_validate_incr_stats_log(void)
     }
 
     /* the fallback rate decides whether the incremental validator is actually doing anything, the late ones are
-     * a rule that deletes data on most edits */
-    SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%), %" PRIu64 " late.", calls,
-            fallbacks, (100.0 * (double)fallbacks) / (double)calls, late);
+     * a rule that deletes data on most edits; it is on by default, so only a fallback is worth a warning */
+    if (fallbacks) {
+        SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%), %" PRIu64 " late.",
+                calls, fallbacks, (100.0 * (double)fallbacks) / (double)calls, late);
+    } else {
+        SR_LOG_INF("Incremental validation: %" PRIu64 " calls, 0 fallbacks.", calls);
+    }
 }
 
 sr_error_info_t *
