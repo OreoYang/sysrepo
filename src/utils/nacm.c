@@ -4,8 +4,8 @@
  * @brief NACM and ietf-netconf-acm callbacks
  *
  * @copyright
- * Copyright (c) 2019 - 2023 Deutsche Telekom AG.
- * Copyright (c) 2017 - 2023 CESNET, z.s.p.o.
+ * Copyright (c) 2019 - 2026 Deutsche Telekom AG.
+ * Copyright (c) 2017 - 2026 CESNET, z.s.p.o.
  *
  * This source code is licensed under BSD 3-Clause License (the "License").
  * You may not use this file except in compliance with the License.
@@ -20,10 +20,12 @@
 #include "netconf_acm.h"
 
 #include <assert.h>
+#include <ctype.h>
 #include <errno.h>
 #include <grp.h>
 #include <pthread.h>
 #include <pwd.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -260,7 +262,7 @@ sr_nacm_group_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const char 
     sr_change_oper_t op;
     const struct lyd_node *node;
     const char *group_name, *user_name;
-    struct sr_nacm_group *group = NULL;
+    struct sr_nacm_group *group;
     uint32_t i, j;
     char *xpath2;
     int rc;
@@ -288,6 +290,8 @@ sr_nacm_group_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const char 
 
             switch (op) {
             case SR_OP_CREATED:
+                assert(!sr_nacm_group_find(group_name, NULL));
+
                 /* add new group */
                 mem = realloc(nacm.groups, (nacm.group_count + 1) * sizeof *nacm.groups);
                 if (!mem) {
@@ -308,7 +312,7 @@ sr_nacm_group_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const char 
             case SR_OP_DELETED:
                 /* find it */
                 group = sr_nacm_group_find(group_name, &j);
-                assert(group && nacm.group_count);
+                assert(group);
 
                 /* delete all group users */
                 free(group->name);
@@ -326,7 +330,6 @@ sr_nacm_group_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const char 
                     free(nacm.groups);
                     nacm.groups = NULL;
                 }
-                group = NULL;
                 break;
             default:
                 /* NACM UNLOCK */
@@ -624,7 +627,7 @@ sr_nacm_rule_list_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const c
                     prev_list = strchr(prev_list, '\'') + 1;
                     len = strchr(prev_list, '\'') - prev_list;
                     prev_rlist = nacm.rule_lists;
-                    while (prev_rlist && strncmp(prev_rlist->name, prev_list, len)) {
+                    while (prev_rlist && (strncmp(prev_rlist->name, prev_list, len) || prev_rlist->name[len])) {
                         prev_rlist = prev_rlist->next;
                     }
                     assert(prev_rlist);
@@ -795,7 +798,7 @@ sr_nacm_rule_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), const char *
                     prev_list = strchr(prev_list, '\'') + 1;
                     len = strchr(prev_list, '\'') - prev_list;
                     prev_rule = rlist->rules;
-                    while (prev_rule && strncmp(prev_rule->name, prev_list, len)) {
+                    while (prev_rule && (strncmp(prev_rule->name, prev_list, len) || prev_rule->name[len])) {
                         prev_rule = prev_rule->next;
                     }
                     assert(prev_rule);
@@ -976,14 +979,6 @@ sr_nacm_get_user(sr_session_ctx_t *session)
     return session ? session->nacm_user : NULL;
 }
 
-#define SR_CONFIG_SUBSCR(session, sub, mod_name, xpath, opts, cb) \
-    rc = sr_module_change_subscribe(session, mod_name, xpath, cb, NULL, 0, \
-            SR_SUBSCR_DONE_ONLY | SR_SUBSCR_ENABLED | opts, sub); \
-    if (rc) { \
-        sr_errinfo_new(&err_info, rc, "Subscribing for \"%s\" data changes failed.", mod_name); \
-        goto cleanup; \
-    }
-
 #define SR_OPER_SUBSCR(session, sub, mod_name, xpath, opts, cb) \
     rc = sr_oper_get_subscribe(session, mod_name, xpath, cb, NULL, opts, sub); \
     if (rc) { \
@@ -1007,6 +1002,38 @@ sr_nacm_get_user(sr_session_ctx_t *session)
         goto cleanup; \
     }
 
+/**
+ * @brief Callback handling all NACM configuration changes.
+ */
+static int
+sr_nacm_config_cb(sr_session_ctx_t *session, uint32_t sub_id, const char *module_name,
+        const char *UNUSED(xpath), sr_event_t event, uint32_t request_id, void *private_data)
+{
+    int rc;
+
+    if ((rc = sr_nacm_nacm_params_cb(session, sub_id, module_name, "/ietf-netconf-acm:nacm", event, request_id,
+            private_data))) {
+        return rc;
+    }
+
+    if ((rc = sr_nacm_group_cb(session, sub_id, module_name, "/ietf-netconf-acm:nacm/groups/group", event, request_id,
+            private_data))) {
+        return rc;
+    }
+
+    if ((rc = sr_nacm_rule_list_cb(session, sub_id, module_name, "/ietf-netconf-acm:nacm/rule-list", event, request_id,
+            private_data))) {
+        return rc;
+    }
+
+    if ((rc = sr_nacm_rule_cb(session, sub_id, module_name, "/ietf-netconf-acm:nacm/rule-list/rule", event, request_id,
+            private_data))) {
+        return rc;
+    }
+
+    return SR_ERR_OK;
+}
+
 API int
 sr_nacm_init(sr_session_ctx_t *session, uint32_t opts, sr_subscription_ctx_t **sub)
 {
@@ -1023,18 +1050,14 @@ sr_nacm_init(sr_session_ctx_t *session, uint32_t opts, sr_subscription_ctx_t **s
     /* subscribe to all the relevant config data */
     sr_session_switch_ds(session, SR_DS_RUNNING);
 
+    /* NACM configuration data, single callback to avoid data races with SR_SUBSCR_ENABLED option */
     mod_name = "ietf-netconf-acm";
     xpath = "/ietf-netconf-acm:nacm";
-    SR_CONFIG_SUBSCR(session, sub, mod_name, xpath, opts, sr_nacm_nacm_params_cb);
-
-    xpath = "/ietf-netconf-acm:nacm/groups/group";
-    SR_CONFIG_SUBSCR(session, sub, mod_name, xpath, opts, sr_nacm_group_cb);
-
-    xpath = "/ietf-netconf-acm:nacm/rule-list";
-    SR_CONFIG_SUBSCR(session, sub, mod_name, xpath, opts, sr_nacm_rule_list_cb);
-
-    xpath = "/ietf-netconf-acm:nacm/rule-list/rule";
-    SR_CONFIG_SUBSCR(session, sub, mod_name, xpath, opts, sr_nacm_rule_cb);
+    if ((rc = sr_module_change_subscribe(session, mod_name, xpath, sr_nacm_config_cb, NULL, 0,
+            SR_SUBSCR_DONE_ONLY | SR_SUBSCR_ENABLED | opts, sub))) {
+        sr_errinfo_new(&err_info, rc, "Subscribing for \"%s\" data changes failed.", mod_name);
+        goto cleanup;
+    }
 
     /* sr monitoring state data */
     mod_name = "sysrepo-monitoring";
@@ -1211,6 +1234,14 @@ cleanup:
 static sr_error_info_t *
 sr_nacm_allowed_tree(const struct lysc_node *root, const char *user, int *allowed)
 {
+    sr_error_info_t *err_info = NULL;
+
+    /* 0) opaque node, invalid */
+    if (!root) {
+        sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Invalid opaque node subtree in NACM check.");
+        return err_info;
+    }
+
     /* 1) NACM is off */
     if (!nacm.enabled) {
         *allowed = 1;
@@ -1357,8 +1388,9 @@ cleanup:
 static int
 sr_nacm_allowed_path(const char *rule_target, const char *node_path, const char *user)
 {
-    const char *rule_ptr, *node_ptr;
-    size_t val_len;
+    const char *rule_ptr, *node_ptr, *rule_val, *node_val;
+    char quot;
+    uint32_t rule_val_len, node_val_len;
 
     rule_ptr = rule_target;
     node_ptr = node_path;
@@ -1367,29 +1399,22 @@ sr_nacm_allowed_path(const char *rule_target, const char *node_path, const char 
         if (rule_ptr[0] == node_ptr[0]) {
             ++rule_ptr;
             ++node_ptr;
-        } else if ((rule_ptr[0] == '$') && (rule_ptr[-1] == '=') && (node_ptr[0] == '\'') && (node_ptr[-1] == '=')) {
-            /* variable used */
-            ++rule_ptr;
-            if (strncmp(rule_ptr, "USER]", 5)) {
-                SR_LOG_WRN("Variable \"%.*s\" not defined.", (int)(strchr(rule_ptr, ']') - rule_ptr), rule_ptr);
-                return 0;
-            }
-            rule_ptr += 4;
+        } else if (sr_path_is_val(rule_ptr) && sr_path_is_val(node_ptr)) {
+            /* compare values */
+            rule_ptr = sr_path_get_val(rule_ptr, user, &rule_val, &rule_val_len);
+            node_ptr = sr_path_get_val(node_ptr, user, &node_val, &node_val_len);
 
-            /* compare value */
-            ++node_ptr;
-            val_len = strchr(node_ptr, '\'') - node_ptr;
-            if ((strlen(user) != val_len) || strncmp(user, node_ptr, val_len)) {
+            if ((rule_val_len != node_val_len) || strncmp(rule_val, node_val, rule_val_len)) {
                 return 0;
             }
-            node_ptr += val_len + 1;
         } else if ((rule_ptr[0] == '/') && (node_ptr[0] == '[')) {
             /* target has no predicate, skip it in path as well because it matches any value */
             while (node_ptr[0] != ']') {
-                if (node_ptr[0] == '\'') {
+                if ((node_ptr[0] == '\'') || (node_ptr[0] == '\"')) {
+                    quot = node_ptr[0];
                     do {
                         ++node_ptr;
-                    } while (node_ptr[0] != '\'');
+                    } while (node_ptr[0] != quot);
                 }
 
                 ++node_ptr;
@@ -1496,7 +1521,18 @@ sr_nacm_allowed_node(const struct lyd_node *node, const char *node_path, const s
     sr_error_info_t *err_info = NULL;
     struct sr_nacm_rule_list *rlist;
     struct sr_nacm_rule *r;
+
+    enum {
+        RULE_PARTIAL_MATCH_NONE = 0,
+        RULE_PARTIAL_MATCH_PERMIT = 1,
+        RULE_PARTIAL_MATCH_DENY = 2
+    } partial_access = RULE_PARTIAL_MATCH_NONE;
+    int path_match;
+    LYA_COUNT_T u;
     char *path;
+
+    assert(node || (node_path && node_schema));
+    assert(oper);
 
     *access = SR_NACM_ACCESS_DENY;
     if (rule) {
@@ -1506,19 +1542,12 @@ sr_nacm_allowed_node(const struct lyd_node *node, const char *node_path, const s
         *def = NULL;
     }
 
-    enum {
-        RULE_PARTIAL_MATCH_NONE = 0,
-        RULE_PARTIAL_MATCH_PERMIT = 1,
-        RULE_PARTIAL_MATCH_DENY = 2
-    } partial_access = RULE_PARTIAL_MATCH_NONE;
-    int path_match;
-    LY_ARRAY_COUNT_TYPE u;
-
-    assert(node || (node_path && node_schema));
-    assert(oper);
-
     if (!node_schema) {
         node_schema = node->schema;
+    }
+    if (!node_schema) {
+        sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Invalid opaque node \"%s\" in NACM check.", LYD_NAME(node));
+        goto cleanup;
     }
 
     /*
@@ -1612,7 +1641,7 @@ sr_nacm_allowed_node(const struct lyd_node *node, const char *node_path, const s
 
 step10:
     /* 10) check default-deny-all extension */
-    LY_ARRAY_FOR(node_schema->exts, u) {
+    LYA_FOR(node_schema->exts, u) {
         if (!strcmp(node_schema->exts[u].def->module->name, "ietf-netconf-acm")) {
             if (!strcmp(node_schema->exts[u].def->name, "default-deny-all")) {
                 if (def) {
@@ -1673,7 +1702,7 @@ cleanup:
         /* node itself is allowed but a rule denies access to some descendants */
         *access = SR_NACM_ACCESS_PARTIAL_PERMIT;
     }
-    return NULL;
+    return err_info;
 }
 
 sr_error_info_t *
@@ -1703,7 +1732,10 @@ sr_nacm_check_op(const char *nacm_user, const struct lyd_node *data, struct sr_d
 
     op = data;
     while (op) {
-        if (op->schema->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)) {
+        if (!op->schema) {
+            sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Invalid opaque node \"%s\" in NACM check.", LYD_NAME(op));
+            goto cleanup;
+        } else if (op->schema->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)) {
             /* we found the desired node */
             break;
         }
@@ -1776,7 +1808,7 @@ sr_nacm_check_op(const char *nacm_user, const struct lyd_node *data, struct sr_d
     allowed = 1;
 
 cleanup:
-    if (!allowed && op) {
+    if (!err_info && !allowed && op) {
         if (op->schema->nodetype & (LYS_RPC | LYS_ACTION)) {
             ++nacm.denied_operations;
         } else {
@@ -2240,11 +2272,17 @@ sr_nacm_check_diff_r(const struct lyd_node *diff, const char *user, const char *
                 return err_info;
             }
 
+            if (access == SR_NACM_ACCESS_PARTIAL_DENY) {
+                /* we are analyzing every node separately, default or explicit rule make no difference for deny */
+                access = SR_NACM_ACCESS_DENY;
+            }
+            /* partial permit does not allow access to the descendants, continue recursion */
+
             if (access == SR_NACM_ACCESS_PERMIT) {
                 /* whole subtree permitted, continue with sibling subtrees */
                 continue;
             } else if (access == SR_NACM_ACCESS_DENY) {
-                /* node denied explicitly, access denied */
+                /* node with operation denied */
                 denied->denied = 1;
                 denied->node = diff;
                 denied->rule_name = rule ? strdup(rule->name) : NULL;

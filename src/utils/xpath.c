@@ -145,11 +145,17 @@ sr_xpath_next_key_name(char *xpath, sr_xpath_ctx_t *state)
         index++;
     }
 
-    if (*index == '=') {
-        state->replaced_char = *index;
-        state->replaced_position = index;
-        (*index) = 0;
+    if (*index != '=') {
+        /* No '=' in the rest of the input -- e.g. a trailing positional predicate like "[1]",
+         * which is ordinary XPath and is what lyd_path() emits for a keyless list or a
+         * config-false leaf-list. There is no key NAME here. Success cannot be reported without
+         * while leaving the resume position untouched. */
+        return NULL;
     }
+
+    state->replaced_char = *index;
+    state->replaced_position = index;
+    (*index) = 0;
 
     return key;
 }
@@ -547,7 +553,7 @@ sr_xpath_node_name(const char *xpath)
 {
     const char *res = NULL, *quot = NULL;
 
-    if (NULL != xpath) {
+    if (xpath && xpath[0]) {
         res = xpath + strlen(xpath) - 1;
         while (res != xpath && (quot != NULL || *res != '/')) {
             if ((quot != NULL) && (*res == *quot)) {

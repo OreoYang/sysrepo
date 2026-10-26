@@ -4,8 +4,8 @@
  * @brief public API sysrepo header
  *
  * @copyright
- * Copyright (c) 2018 - 2025 Deutsche Telekom AG.
- * Copyright (c) 2018 - 2025 CESNET, z.s.p.o.
+ * Copyright (c) 2018 - 2026 Deutsche Telekom AG.
+ * Copyright (c) 2018 - 2026 CESNET, z.s.p.o.
  *
  * This source code is licensed under BSD 3-Clause License (the "License").
  * You may not use this file except in compliance with the License.
@@ -94,11 +94,28 @@ sr_log_level_t sr_log_get_syslog(void);
 
 /**
  * @brief Sets callback that will be called when a log entry would be populated.
- * Callback will be called for every message __regardless__ of any log level.
+ * By default the callback is called for every message regardless of any log level,
+ * this can be changed with ::sr_log_set_cb_level().
  *
  * @param[in] log_callback Callback to be called when a log entry would populated.
  */
 void sr_log_set_cb(sr_log_cb log_callback);
+
+/**
+ * @brief Enables / disables / changes log level (verbosity) of logging to log callback.
+ *
+ * By default, logging to callback is enabled on level ::SR_LL_DBG.
+ *
+ * @param[in] log_level Requested log level (verbosity).
+ */
+void sr_log_set_cb_level(sr_log_level_t log_level);
+
+/**
+ * @brief Learn current log callback log level.
+ *
+ * @return log callback log level.
+ */
+sr_log_level_t sr_log_get_cb_level(void);
 
 /** @} logging */
 
@@ -255,6 +272,34 @@ uid_t sr_get_su_uid(void);
 sr_cid_t sr_get_cid(sr_conn_ctx_t *conn);
 
 /**
+ * @brief Transform a subtree filter into an XPath filter.
+ *
+ * @param[in] session Optional session for storing errors.
+ * @param[in] subtree Subtree of the filter itself.
+ * @param[in] for_eval If set, connects filters with operator 'and' (result is boolean),
+ * otherwise '|' (result is a node set).
+ * @param[out] xpath_filter Generated XPath filter.
+ * @return Error code (::SR_ERR_OK on success).
+ */
+int sr_filter_subtree2xpath(sr_session_ctx_t *session, const struct lyd_node *subtree, int for_eval, char **xpath_filter);
+
+/**
+ * @brief Get the directory with internal sysrepo YANG modules.
+ *
+ * @return YANG module dir.
+ */
+const char *sr_yang_module_dir(void);
+
+/**
+ * @brief Set the directory with internal sysrepo YANG modules.
+ *
+ * Normally, when sysrepo is installed on a system, the default directory should work.
+ *
+ * @return Error code (::SR_ERR_OK on success).
+ */
+int sr_set_yang_module_dir(const char *path);
+
+/**
  * @brief Start a new session.
  *
  * @param[in] conn Connection to use.
@@ -321,6 +366,16 @@ int sr_session_switch_ds(sr_session_ctx_t *session, sr_datastore_t ds);
  * @return Datastore of the session.
  */
 sr_datastore_t sr_session_get_ds(sr_session_ctx_t *session);
+
+/**
+ * @brief Get event originator session ID.
+ *
+ * Allows to map specific callback events to their originators in a simple way.
+ *
+ * @param[in] session Implicit session provided in a callback.
+ * @return Originator session ID if any, 0 otherwise.
+ */
+uint32_t sr_session_get_orig_sid(sr_session_ctx_t *session);
 
 /**
  * @brief Set event originator name used for all events sent on this session.
@@ -697,6 +752,20 @@ int sr_set_module_replay_support(sr_conn_ctx_t *conn, const char *module_name, i
  */
 int sr_get_module_replay_support(sr_conn_ctx_t *conn, const char *module_name, struct timespec *earliest_notif,
         int *enabled);
+
+/**
+ * @brief Learn replay details of a module.
+ *
+ * @param[in] conn Connection to use.
+ * @param[in] module_name Name of the module to check.
+ * @param[in] after Optional, get the earliest stored notification exactly at or after this time.
+ * @param[out] earliest_notif Optional timestamp of the earliest stored notification (at or after @p after),
+ * zeroed if none are stored. Can be set even if replay is disabled when it was enabled in the past.
+ * @param[out] replay_start Optional timestamp when replay was enabled, zeroed if replay is currently disabled.
+ * @return Error code (::SR_ERR_OK on success).
+ */
+int sr_get_module_replay_start(sr_conn_ctx_t *conn, const char *module_name, const struct timespec *after,
+        struct timespec *earliest_notif, struct timespec *replay_start);
 
 /**
  * @brief Change module permissions.

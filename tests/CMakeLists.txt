@@ -31,21 +31,33 @@ if(NOT SR_HAVE_PTHREAD_BARRIER)
     list(APPEND test_sources "pthread_barrier.c")
 endif()
 
+# directory with the sysrepo-notifd log and PID files of the notifd tests, generated into
+# both the test config header and the cleanup script so that they cannot get out of sync
+set(TEST_NOTIFD_DATA_DIR ${PROJECT_BINARY_DIR}/test_notifd_data)
+
 # generate config
 configure_file("${PROJECT_SOURCE_DIR}/tests/tcommon.h.in" "${PROJECT_BINARY_DIR}/tests/tcommon.h" ESCAPE_QUOTES @ONLY)
 
+# generate the script killing the daemons left behind by an aborted notifd test
+configure_file("${PROJECT_SOURCE_DIR}/tests/scripts/kill_notifd.sh.in" "${PROJECT_BINARY_DIR}/tests/scripts/kill_notifd.sh" ESCAPE_QUOTES @ONLY)
+
+set(TEST_KILL_NOTIFD_CMD ${PROJECT_BINARY_DIR}/tests/scripts/kill_notifd.sh)
 set(TEST_CLEAR_REPOS_CMD rm -rf ${PROJECT_BINARY_DIR}/test_repositories)
 set(TEST_CLEAR_SHM_CMD find /dev/shm/ -maxdepth 1 -readable -name _tests_sr_* -delete)
 if(${CMAKE_VERSION} VERSION_GREATER "3.7")
-    # tests cleanup fixtures
+    # tests cleanup fixtures, the daemons must be killed before their SHM is removed
+    add_test(NAME tests_kill_notifd
+        COMMAND ${TEST_KILL_NOTIFD_CMD}
+    )
+    set_tests_properties(tests_kill_notifd PROPERTIES FIXTURES_CLEANUP tests_cleanup)
     add_test(NAME tests_clear_repos
         COMMAND ${TEST_CLEAR_REPOS_CMD}
     )
-    set_tests_properties(tests_clear_repos PROPERTIES FIXTURES_CLEANUP tests_cleanup)
+    set_tests_properties(tests_clear_repos PROPERTIES FIXTURES_CLEANUP tests_cleanup DEPENDS tests_kill_notifd)
     add_test(NAME tests_clear_shm
         COMMAND ${TEST_CLEAR_SHM_CMD}
     )
-    set_tests_properties(tests_clear_shm PROPERTIES FIXTURES_CLEANUP tests_cleanup)
+    set_tests_properties(tests_clear_shm PROPERTIES FIXTURES_CLEANUP tests_cleanup DEPENDS tests_kill_notifd)
 endif()
 
 if(ENABLE_TESTS)
@@ -56,8 +68,13 @@ if(ENABLE_TESTS)
 
     # lists of all the tests
     set(tests test_modules test_context_change test_validation test_edit test_candidate test_oper_pull test_oper_push
-        test_lock test_apply_changes test_copy_config test_rpc_action test_notif test_get test_process
+        test_lock test_apply_changes test_copy_config test_rpc_action test_notif test_get test_privcand test_process
         test_multi_connection test_nacm test_rotation test_sub_notif test_plugin test_rwlock)
+
+    # sysrepo-notifd tests, sharing the harness in notifd/
+    set(notifd_tests test_notifd_lifecycle test_notifd_filters test_notifd_receivers test_notifd_encoding
+        test_notifd_dispatch)
+    set(notifd_test_sources notifd/tnotifd.c notifd/tnotifd_udp.c)
 
     foreach(test_name IN LISTS tests)
         # link srobj to get the number of DS plugins available
@@ -69,6 +86,11 @@ if(ENABLE_TESTS)
         endif()
     endforeach()
 
+    foreach(test_name IN LISTS notifd_tests)
+        add_executable(${test_name} ${test_sources} ${notifd_test_sources} notifd/${test_name}.c)
+    endforeach()
+    list(APPEND tests ${notifd_tests})
+
     # set common attributes of all tests
     foreach(test_name IN LISTS tests)
         target_link_libraries(${test_name} ${CMOCKA_LIBRARIES} sysrepo)
@@ -79,6 +101,7 @@ if(ENABLE_TESTS)
             "SYSREPO_REPOSITORY_PATH=${PROJECT_BINARY_DIR}/test_repositories/${test_name}"
             "SYSREPO_SHM_PREFIX=_tests_sr_${test_name}"
             "SR_ENV_RUN_TESTS=1"
+            "TEST_NAME=${test_name}"
         )
 
         # avoid loading installed plugins by sysrepo-plugind
@@ -108,6 +131,7 @@ if(ENABLE_VALGRIND_TESTS)
             "SYSREPO_REPOSITORY_PATH=${PROJECT_BINARY_DIR}/test_repositories/${test_name}"
             "SYSREPO_SHM_PREFIX=_tests_sr_${test_name}"
             "SR_ENV_RUN_TESTS=1"
+            "TEST_NAME=${test_name}"
         )
 
         # avoid loading installed plugins by sysrepo-plugind
@@ -125,6 +149,7 @@ endif()
 
 # phony target for clearing all sysrepo test data
 add_custom_target(test_clean
+    COMMAND ${TEST_KILL_NOTIFD_CMD} --remove-data
     COMMAND ${TEST_CLEAR_REPOS_CMD}
     COMMAND ${TEST_CLEAR_SHM_CMD}
 )

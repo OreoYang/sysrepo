@@ -108,6 +108,8 @@ help_print(void)
             "                       plugin initialization is finished.\n"
             "  -f, --fatal-plugin-fail\n"
             "                       If any plugin initialization fails, terminate sysrepo-plugind.\n"
+            "  -s, --search-dir <dir>\n"
+            "                       Directory to search in for the internal sysrepo modules.\n"
             "\n"
             "Environment variable $SRPD_PLUGINS_PATH overwrites the default plugins directory.\n"
             "\n");
@@ -419,49 +421,42 @@ cleanup:
 }
 
 static int
-open_pidfile(const char *pidfile)
+create_pidfile(const char *pidfile)
 {
-    int pidfd;
+    int fd, pid_len;
+    char pid[30];
 
-    pidfd = open(pidfile, O_RDWR | O_CREAT, 0640);
-    if (pidfd < 0) {
+    fd = open(pidfile, O_RDWR | O_CREAT, 0640);
+    if (fd < 0) {
         error_print(0, "Unable to open the PID file \"%s\" (%s).", pidfile, strerror(errno));
         return -1;
     }
 
-    if (lockf(pidfd, F_TLOCK, 0) < 0) {
+    if (lockf(fd, F_TLOCK, 0) < 0) {
         if ((errno == EACCES) || (errno == EAGAIN)) {
             error_print(0, "Another instance of the sysrepo-plugind is running.");
         } else {
             error_print(0, "Unable to lock the PID file \"%s\" (%s).", pidfile, strerror(errno));
         }
-        close(pidfd);
+        close(fd);
         return -1;
     }
 
-    return pidfd;
-}
-
-static int
-write_pidfile(int pidfd)
-{
-    char pid[30] = {0};
-    int pid_len;
-
-    if (ftruncate(pidfd, 0)) {
+    if (ftruncate(fd, 0)) {
         error_print(0, "Failed to truncate pid file (%s).", strerror(errno));
+        close(fd);
         return -1;
     }
 
-    snprintf(pid, sizeof(pid) - 1, "%ld\n", (long) getpid());
-
+    snprintf(pid, sizeof(pid) - 1, "%ld\n", (long)getpid());
     pid_len = strlen(pid);
-    if (write(pidfd, pid, pid_len) < pid_len) {
+    if (write(fd, pid, pid_len) < pid_len) {
         error_print(0, "Failed to write PID into pid file (%s).", strerror(errno));
+        close(fd);
         return -1;
     }
 
-    return 0;
+    return fd;
 }
 
 int
@@ -482,12 +477,13 @@ main(int argc, char **argv)
         {"plugin-install",    required_argument, NULL, 'P'},
         {"pid-file",          required_argument, NULL, 'p'},
         {"fatal-plugin-fail", no_argument,       NULL, 'f'},
+        {"search-dir",        required_argument, NULL, 's'},
         {NULL,                0,                 NULL, 0},
     };
 
     /* process options */
     opterr = 0;
-    while ((opt = getopt_long(argc, argv, "hVv:dP:p:f", options, NULL)) != -1) {
+    while ((opt = getopt_long(argc, argv, "hVv:dP:p:fs:", options, NULL)) != -1) {
         switch (opt) {
         case 'h':
             version_print();
@@ -540,6 +536,9 @@ main(int argc, char **argv)
         case 'f':
             fatal_fail = 1;
             break;
+        case 's':
+            sr_set_yang_module_dir(optarg);
+            break;
         default:
             error_print(0, "Invalid option or missing argument: -%c", optopt);
             goto cleanup;
@@ -549,10 +548,6 @@ main(int argc, char **argv)
     /* check for additional argument */
     if (optind < argc) {
         error_print(0, "Redundant parameters");
-        goto cleanup;
-    }
-
-    if (pidfile && ((pidfd = open_pidfile(pidfile)) < 0)) {
         goto cleanup;
     }
 
@@ -604,8 +599,8 @@ main(int argc, char **argv)
         goto cleanup;
     }
 
-    /* update pid file */
-    if (pidfile && (write_pidfile(pidfd) < 0)) {
+    /* create pid file */
+    if (pidfile && ((pidfd = create_pidfile(pidfile)) < 0)) {
         goto cleanup;
     }
 
@@ -644,7 +639,7 @@ cleanup:
     }
     free(plugins);
 
-    if (pidfd >= 0) {
+    if (pidfd > -1) {
         close(pidfd);
         unlink(pidfile);
     }

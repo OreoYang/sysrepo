@@ -25,6 +25,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <libyang/libyang.h>
 
@@ -161,7 +163,7 @@ sr_lycc_lock(sr_conn_ctx_t *conn, sr_lock_mode_t mode, int lydmods_lock, const c
          * so it needs to be done now to avoid context data collision, see ::sr_lycc_store_context() */
         sr_yang_ctx.content_id = 0;
         sr_yang_ctx.sm_data_id = 0;
-        ly_ctx_destroy(sr_yang_ctx.ly_ctx);
+        sr_ly_ctx_destroy(sr_yang_ctx.ly_ctx);
         sr_yang_ctx.ly_ctx = NULL;
 
         /* get the printed context from the SHM if it is supported/available */
@@ -207,7 +209,7 @@ sr_lycc_lock(sr_conn_ctx_t *conn, sr_lock_mode_t mode, int lydmods_lock, const c
     sr_available_conn = conn;
 
 cleanup_unlock:
-    ly_ctx_destroy(new_ctx);
+    sr_ly_ctx_destroy(new_ctx);
     if (err_info) {
         if (remap_mode) {
             /* MOD REMAP UNLOCK */
@@ -1208,9 +1210,10 @@ void
 sr_lycc_store_context(sr_shm_t *shm, struct ly_ctx *ctx)
 {
     sr_error_info_t *err_info = NULL;
-    int ctx_size = 0, fd = -1;
+    int ctx_size = 0, fd = -1, prev_file_rc;
     void *mem = NULL, *mem_end;
     char *shm_name_tmp = NULL, *shm_name = NULL;
+    struct stat st;
 
     if (!SR_PRINTED_LYCTX_ADDRESS) {
         /* printed context not supported */
@@ -1240,6 +1243,14 @@ sr_lycc_store_context(sr_shm_t *shm, struct ly_ctx *ctx)
         goto cleanup;
     }
 
+    if ((void *)sr_yang_ctx.ly_ctx == shm->addr) {
+        /* destroy the context now, will be unmapped below */
+        sr_yang_ctx.content_id = 0;
+        sr_yang_ctx.sm_data_id = 0;
+        sr_ly_ctx_destroy(sr_yang_ctx.ly_ctx);
+        sr_yang_ctx.ly_ctx = NULL;
+    }
+
     /* unmap to avoid collision */
     if (shm->addr) {
         munmap(shm->addr, shm->size);
@@ -1260,6 +1271,10 @@ sr_lycc_store_context(sr_shm_t *shm, struct ly_ctx *ctx)
     if ((err_info = sr_ly_ctx_compiled_print(ctx, mem, &mem_end))) {
         goto cleanup;
     }
+    assert(((char *)mem_end - (char *)mem) == ctx_size);
+
+    /* learn UID/GID of the current file, if any */
+    prev_file_rc = stat(shm_name, &st);
 
     /* rename so that existing maps can still access the old content */
     if (rename(shm_name_tmp, shm_name) == -1) {
@@ -1267,14 +1282,22 @@ sr_lycc_store_context(sr_shm_t *shm, struct ly_ctx *ctx)
         goto cleanup;
     }
 
-    assert(((char *)mem_end - (char *)mem) == ctx_size);
+    if (!prev_file_rc) {
+        /* set the previous UID/GID so the file can be updated by the same users */
+        if ((chown(shm_name, st.st_uid, st.st_gid) == -1) && (errno != EPERM)) {
+            SR_ERRINFO_SYSERRNO(&err_info, "chown");
+            goto cleanup;
+        }
+    }
 
-    /* destroy the old printed context, it will be unmapped anyways,
-     * doing it now avoids a context data collision with the new context */
-    sr_yang_ctx.content_id = 0;
-    sr_yang_ctx.sm_data_id = 0;
-    ly_ctx_destroy(sr_yang_ctx.ly_ctx);
-    sr_yang_ctx.ly_ctx = NULL;
+    if (sr_yang_ctx.ly_ctx) {
+        /* destroy the old printed context, it will be unmapped anyways,
+         * doing it now avoids a context data collision with the new context */
+        sr_yang_ctx.content_id = 0;
+        sr_yang_ctx.sm_data_id = 0;
+        sr_ly_ctx_destroy(sr_yang_ctx.ly_ctx);
+        sr_yang_ctx.ly_ctx = NULL;
+    }
 
 cleanup:
     if (err_info && shm_name_tmp) {

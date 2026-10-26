@@ -4,8 +4,8 @@
  * @brief logging routines
  *
  * @copyright
- * Copyright (c) 2018 - 2024 Deutsche Telekom AG.
- * Copyright (c) 2018 - 2024 CESNET, z.s.p.o.
+ * Copyright (c) 2018 - 2026 Deutsche Telekom AG.
+ * Copyright (c) 2018 - 2026 CESNET, z.s.p.o.
  *
  * This source code is licensed under BSD 3-Clause License (the "License").
  * You may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <unistd.h>
 
 #include <libyang/libyang.h>
 
@@ -36,6 +37,7 @@ sr_log_level_t sr_stderr_ll = SR_LL_NONE;   /**< stderr log level */
 sr_log_level_t sr_syslog_ll = SR_LL_NONE;   /**< syslog log level */
 int syslog_open;                            /**< Whether syslog was opened */
 sr_log_cb sr_lcb;                           /**< Logging callback */
+sr_log_level_t sr_lcb_ll = SR_LL_DBG;       /**< logging callback log level */
 
 /**
  * @brief String error list.
@@ -57,6 +59,7 @@ static const char * const sr_errlist[] = {
     "Timeout expired",                          /* SR_ERR_TIME_OUT */
     "User callback failed",                     /* SR_ERR_CALLBACK_FAILED */
     "User callback shelved",                    /* SR_ERR_CALLBACK_SHELVE */
+    "Secondary user callback failed",           /* SR_ERR_OK_CALLBACK_FAILED */
 };
 
 struct sr_error_info_err2_s {
@@ -105,6 +108,12 @@ sr_api_ret(sr_session_ctx_t *session, sr_error_info_t *err_info)
     return err_code;
 }
 
+int
+sr_log_msg_hidden(sr_log_level_t ll)
+{
+    return (ll > sr_stderr_ll) && (ll > sr_syslog_ll) && (!sr_lcb || (ll > sr_lcb_ll));
+}
+
 void
 sr_log_msg(int plugin, sr_log_level_t ll, const char *msg)
 {
@@ -148,7 +157,7 @@ sr_log_msg(int plugin, sr_log_level_t ll, const char *msg)
     }
 
     /* logging callback */
-    if (sr_lcb) {
+    if (sr_lcb && (ll <= sr_lcb_ll)) {
         sr_lcb(ll, msg);
     }
 }
@@ -320,6 +329,11 @@ sr_log(sr_log_level_t ll, const char *format, ...)
     char *msg;
     int msg_len = 0;
 
+    if (sr_log_msg_hidden(ll)) {
+        /* no destination wants this level, do not waste time formatting the message */
+        return;
+    }
+
     va_start(ap, format);
     sr_vsprintf(&msg, &msg_len, 0, format, ap);
     va_end(ap);
@@ -395,6 +409,27 @@ cleanup:
     free(msg);
 }
 
+void
+sr_errinfo_new_sudo_eaccess(sr_error_info_t **err_info)
+{
+    char buf[8], *ret = NULL;
+    FILE *f;
+
+    if ((errno == EACCES) && !geteuid()) {
+        /* check kernel parameter value of fs.protected_regular */
+        f = fopen("/proc/sys/fs/protected_regular", "r");
+        if (f) {
+            ret = fgets(buf, sizeof(buf), f);
+            fclose(f);
+        }
+    }
+
+    if (ret && (atoi(buf) != 0)) {
+        sr_errinfo_new(err_info, SR_ERR_SYS, "Caused by kernel parameter \"fs.protected_regular\", "
+                "which must be \"0\" (currently \"%d\").", atoi(buf));
+    }
+}
+
 API void
 srplg_log_errinfo(sr_error_info_t **err_info, const char *plg_name, const char *err_format_name, sr_error_t err_code,
         const char *format, ...)
@@ -449,6 +484,11 @@ srplg_log(const char *plg_name, sr_log_level_t ll, const char *format, ...)
     int msg_len = 0, off;
 
     if (!plg_name) {
+        return;
+    }
+
+    if (sr_log_msg_hidden(ll)) {
+        /* no destination wants this level, do not waste time formatting the message */
         return;
     }
 
@@ -512,4 +552,16 @@ API void
 sr_log_set_cb(sr_log_cb log_callback)
 {
     sr_lcb = log_callback;
+}
+
+API void
+sr_log_set_cb_level(sr_log_level_t log_level)
+{
+    sr_lcb_ll = log_level;
+}
+
+API sr_log_level_t
+sr_log_get_cb_level(void)
+{
+    return sr_lcb_ll;
 }

@@ -34,6 +34,13 @@
 sr_error_info_t *sr_ly_ctx_new(struct ly_ctx **ly_ctx);
 
 /**
+ * @brief Destroy a libyang context.
+ *
+ * @param[in] ly_ctx Context to destroy.
+ */
+void sr_ly_ctx_destroy(struct ly_ctx *ly_ctx);
+
+/**
  * @brief Parse a YANG module.
  *
  * @param[in] ctx Context to use.
@@ -489,6 +496,16 @@ sr_error_info_t *sr_lyd_merge_module(struct lyd_node **target, const struct lyd_
 sr_error_info_t *sr_lyd_find_xpath(const struct lyd_node *tree, const char *xpath, struct ly_set **set);
 
 /**
+ * @brief Evaluate XPath on a set of nodes.
+ *
+ * @param[in] tree Data tree to search.
+ * @param[in] xpath XPath expression in JSON format.
+ * @param[out] result Result of the evaluation.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *sr_lyd_eval_xpath(const struct lyd_node *tree, const char *xpath, ly_bool *result);
+
+/**
  * @brief Find the nodes selected by a path.
  *
  * @param[in] tree Data tree to search.
@@ -581,6 +598,17 @@ sr_error_info_t *sr_lyd_insert_after(struct lyd_node *sibling, struct lyd_node *
 sr_error_info_t *sr_lyd_change_term(struct lyd_node *node, const char *value, int ignore_fail);
 
 /**
+ * @brief Replace value of target with the one in the source.
+ *
+ * Correctly handle unions and value hints to avoid changing the resolved types.
+ *
+ * @param[in,out] trg Target node to modify.
+ * @param[in] src Source node to use.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *sr_lyd_replace_term(struct lyd_node *trg, const struct lyd_node *src);
+
+/**
  * @brief Get string value of an any node.
  *
  * @param[in] node Any node.
@@ -613,6 +641,15 @@ sr_error_info_t *sr_lyd_any_copy_value(struct lyd_node *node, const struct lyd_n
  */
 sr_error_info_t *sr_lyd_diff_siblings(const struct lyd_node *target, const struct lyd_node *source, uint32_t options,
         int *snode_not_found, struct lyd_node **diff);
+
+/**
+ * @brief Apply the whole diff tree on a data tree.
+ *
+ * @param[in,out] data Data to apply the diff on.
+ * @param[in] diff Diff to apply.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *sr_lyd_diff_apply_all(struct lyd_node **data, const struct lyd_node *diff);
 
 /**
  * @brief Apply diff of a specific module on data.

@@ -69,6 +69,11 @@
 static sr_error_info_t *sr_xpath_get_text_pred_atoms(const char *xpath, char ***xp_atoms, uint32_t *xp_atom_count);
 
 /**
+ * @brief Path to the directory with internal sysrepo YANG modules.
+ */
+char sr_internal_yang_module_dir[SR_PATH_MAX];
+
+/**
  * @brief Internal datastore plugin array.
  */
 const struct srplg_ds_s *sr_internal_ds_plugins[] = {
@@ -596,7 +601,7 @@ sr_remove_module_yang_r(const struct lys_module *ly_mod, const struct ly_ctx *ne
     sr_error_info_t *err_info = NULL;
     char *path;
     const struct lysp_module *pmod;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
 
     if (sr_is_module_internal(ly_mod) || ly_ctx_get_module(new_ctx, ly_mod->name, ly_mod->revision) ||
             ly_set_contains(del_mod, (void *)ly_mod, NULL)) {
@@ -622,7 +627,7 @@ sr_remove_module_yang_r(const struct lys_module *ly_mod, const struct ly_ctx *ne
     }
 
     /* remove all submodule files */
-    LY_ARRAY_FOR(ly_mod->submodules, u) {
+    LYA_FOR(ly_mod->submodules, u) {
         if ((err_info = sr_path_yang_file(ly_mod->submodules[u].name,
                 ly_mod->submodules[u].revision, &path))) {
             goto cleanup;
@@ -640,7 +645,7 @@ sr_remove_module_yang_r(const struct lys_module *ly_mod, const struct ly_ctx *ne
     pmod = ly_mod->parsed;
     if (pmod) {
         /* remove all (unused) imports recursively */
-        LY_ARRAY_FOR(pmod->imports, u) {
+        LYA_FOR(pmod->imports, u) {
             if ((err_info = sr_remove_module_yang_r(pmod->imports[u].module, new_ctx, del_mod))) {
                 goto cleanup;
             }
@@ -808,7 +813,7 @@ sr_store_module_yang(const struct lys_module *ly_mod, const struct lysp_submodul
     gid_t gid;
 
     if (lysp_submod) {
-        if ((err_info = sr_path_yang_file(lysp_submod->name, lysp_submod->revs ? lysp_submod->revs[0].date : NULL, &path))) {
+        if ((err_info = sr_path_yang_file(lysp_submod->name, lysp_submodule_revision(lysp_submod), &path))) {
             return err_info;
         }
     } else {
@@ -861,12 +866,7 @@ sr_error_info_t *
 sr_store_module_yang_r(const struct lys_module *ly_mod)
 {
     sr_error_info_t *err_info = NULL;
-    LY_ARRAY_COUNT_TYPE u, v;
-
-    if (sr_ly_module_is_internal(ly_mod)) {
-        /* no need to store internal modules */
-        return NULL;
-    }
+    LYA_COUNT_T u, v;
 
     /* store module file */
     if ((err_info = sr_store_module_yang(ly_mod, NULL))) {
@@ -874,13 +874,13 @@ sr_store_module_yang_r(const struct lys_module *ly_mod)
     }
 
     /* store files of all submodules... */
-    LY_ARRAY_FOR(ly_mod->parsed->includes, u) {
+    LYA_FOR(ly_mod->parsed->includes, u) {
         if ((err_info = sr_store_module_yang(ly_mod, ly_mod->parsed->includes[u].submodule))) {
             return err_info;
         }
 
         /* ...and their imports */
-        LY_ARRAY_FOR(ly_mod->parsed->includes[u].submodule->imports, v) {
+        LYA_FOR(ly_mod->parsed->includes[u].submodule->imports, v) {
             if ((err_info = sr_store_module_yang_r(ly_mod->parsed->includes[u].submodule->imports[v].module))) {
                 return err_info;
             }
@@ -888,7 +888,7 @@ sr_store_module_yang_r(const struct lys_module *ly_mod)
     }
 
     /* recursively for all main module imports, as well */
-    LY_ARRAY_FOR(ly_mod->parsed->imports, u) {
+    LYA_FOR(ly_mod->parsed->imports, u) {
         if ((err_info = sr_store_module_yang_r(ly_mod->parsed->imports[u].module))) {
             return err_info;
         }
@@ -909,7 +909,7 @@ static sr_error_info_t *
 sr_collect_module_impl_deps_r(const struct lys_module *ly_mod, const struct lyd_node *sr_mods, struct ly_set *mod_set)
 {
     sr_error_info_t *err_info = NULL;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
     struct ly_set *set = NULL;
     const struct lyd_node *node;
     const struct lys_module *dep_mod;
@@ -929,14 +929,14 @@ sr_collect_module_impl_deps_r(const struct lys_module *ly_mod, const struct lyd_
     }
 
     /* go through augments */
-    LY_ARRAY_FOR(ly_mod->augmented_by, u) {
+    LYA_FOR(ly_mod->augmented_by, u) {
         if ((err_info = sr_collect_module_impl_deps_r(ly_mod->augmented_by[u], sr_mods, mod_set))) {
             goto cleanup;
         }
     }
 
     /* go through deviations */
-    LY_ARRAY_FOR(ly_mod->deviated_by, u) {
+    LYA_FOR(ly_mod->deviated_by, u) {
         if ((err_info = sr_collect_module_impl_deps_r(ly_mod->deviated_by[u], sr_mods, mod_set))) {
             goto cleanup;
         }
@@ -1050,7 +1050,7 @@ sr_module_get_impl_inv_imports(const struct lys_module *ly_mod, struct ly_set *m
 {
     sr_error_info_t *err_info = NULL;
     const struct lys_module *mod;
-    LY_ARRAY_COUNT_TYPE u, v;
+    LYA_COUNT_T u, v;
     uint32_t idx = 0;
     int found;
 
@@ -1062,7 +1062,7 @@ sr_module_get_impl_inv_imports(const struct lys_module *ly_mod, struct ly_set *m
         found = 0;
 
         /* check imports of the module */
-        LY_ARRAY_FOR(mod->parsed->imports, u) {
+        LYA_FOR(mod->parsed->imports, u) {
             if (mod->parsed->imports[u].module == ly_mod) {
                 found = 1;
                 break;
@@ -1071,8 +1071,8 @@ sr_module_get_impl_inv_imports(const struct lys_module *ly_mod, struct ly_set *m
 
         if (!found) {
             /* check import of all the submodules */
-            LY_ARRAY_FOR(mod->parsed->includes, v) {
-                LY_ARRAY_FOR(mod->parsed->includes[v].submodule->imports, u) {
+            LYA_FOR(mod->parsed->includes, v) {
+                LYA_FOR(mod->parsed->includes[v].submodule->imports, u) {
                     if (mod->parsed->includes[v].submodule->imports[u].module == ly_mod) {
                         found = 1;
                         break;
@@ -3035,7 +3035,7 @@ sr_schema_mount_data_get(sr_conn_ctx_t *conn, const struct ly_ctx *ly_ctx, const
 
     /* consolidate without data */
     if ((err_info = sr_modinfo_consolidate(&mod_info, SR_LOCK_READ, SR_MI_PERM_NO | SR_MI_DATA_NO, NULL,
-            SR_OPER_CB_TIMEOUT, 0, 0))) {
+            SR_OPER_CB_TIMEOUT, 0, 0, NULL))) {
         goto cleanup;
     }
 
@@ -3048,7 +3048,7 @@ sr_schema_mount_data_get(sr_conn_ctx_t *conn, const struct ly_ctx *ly_ctx, const
             if ((err_info = sr_module_data_append_yanglib(mod_info.mods[i].ly_mod, &mod_info.data))) {
                 return err_info;
             }
-        } else if ((err_info = sr_module_oper_data_load(&mod_info.mods[i], conn, NULL, NULL, &mod_info.data))) {
+        } else if ((err_info = sr_module_oper_data_load(&mod_info.mods[i], conn, NULL, NULL, &mod_info.data, NULL))) {
             goto cleanup;
         }
     }
@@ -3095,7 +3095,7 @@ sr_schema_mount_create_contexts(struct ly_ctx *ly_ctx, const struct lyd_node *sr
     const struct lysc_node *snode = NULL;
     struct lysc_ext_instance *ext;
     ly_bool sm_data_free;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
     uint32_t i;
 
     /* get all the extension instances */
@@ -3110,7 +3110,7 @@ sr_schema_mount_create_contexts(struct ly_ctx *ly_ctx, const struct lyd_node *sr
         }
 
         /* process all extensions of this node */
-        LY_ARRAY_FOR(snode->exts, u) {
+        LYA_FOR(snode->exts, u) {
             ext = &snode->exts[u];
             if (strcmp(ext->def->module->name, "ietf-yang-schema-mount") || strcmp(ext->def->name, "mount-point")) {
                 /* not a mount point extension */
@@ -3301,7 +3301,7 @@ sr_schema_mount_ds_data_update(sr_conn_ctx_t *conn, struct sr_lycc_ds_data_set_s
 cleanup:
     sr_lycc_clear_data(&cc_info);
     if (destroy_new_ctx) {
-        ly_ctx_destroy(new_ctx);
+        sr_ly_ctx_destroy(new_ctx);
     }
 
     /* CONTEXT DOWNGRADE - leave the unlock to the caller */
@@ -3349,6 +3349,31 @@ sr_schema_mount_session_have_oper_data_for_ctx_update(sr_session_ctx_t *sess, co
     }
 
     return 0;
+}
+
+LY_ERR
+sr_oper_data_merge_cb(struct lyd_node *trg_node, const struct lyd_node *src_node, void *UNUSED(cb_data))
+{
+    sr_error_info_t *err_info = NULL;
+    const char *or = NULL;
+
+    if (!src_node) {
+        /* trg_node subtree is merged with metadata */
+        return LY_SUCCESS;
+    }
+
+    /* get explicit origin, if any set */
+    sr_edit_diff_get_origin(src_node, 0, &or, NULL);
+
+    if (or) {
+        /* ovewrite any previous origin */
+        if ((err_info = sr_edit_diff_set_origin(trg_node, or, 1))) {
+            sr_errinfo_free(&err_info);
+            return LY_EOTHER;
+        }
+    }
+
+    return LY_SUCCESS;
 }
 
 sr_error_info_t *
@@ -3577,6 +3602,11 @@ sr_run_cache_update(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, const struct
             cmod = &run_cache->mods[j];
         }
 
+        /* cache lock released, check again */
+        if (cmod->id == cur_id) {
+            continue;
+        }
+
         /* remove old data */
         mod_data = sr_module_data_unlink(&run_cache->data, cmod->mod, 0);
         lyd_free_siblings(mod_data);
@@ -3612,8 +3642,8 @@ cleanup:
 }
 
 sr_error_info_t *
-sr_run_cache_update_mod(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, const struct lys_module *ly_mod,
-        uint32_t mod_cache_id, struct lyd_node *mod_data)
+sr_run_cache_update_mod(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, struct sr_mod_info_mod_s *mod,
+        struct lyd_node *mod_data)
 {
     sr_error_info_t *err_info = NULL;
     struct sr_run_cache_mod_s *cmod = NULL;
@@ -3626,9 +3656,17 @@ sr_run_cache_update_mod(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, const st
         return err_info;
     }
 
+    /* update the cache ID because data were modified, ignored if data_version callback is used instead */
+    mod->shm_mod->run_cache_id++;
+
+    if (!ATOMIC_LOAD_RELAXED(sr_run_cache.enabled)) {
+        /* run cache disabled */
+        goto cleanup;
+    }
+
     /* find the cache mod */
     for (i = 0; i < run_cache->mod_count; ++i) {
-        if (ly_mod == run_cache->mods[i].mod) {
+        if (mod->ly_mod == run_cache->mods[i].mod) {
             cmod = &run_cache->mods[i];
             break;
         }
@@ -3639,7 +3677,7 @@ sr_run_cache_update_mod(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, const st
     }
 
     /* the data are expected to be just modified, cannot yet be cached */
-    assert(cmod->id != mod_cache_id);
+    assert(cmod->id != mod->shm_mod->run_cache_id);
 
     /* remove old data */
     old_data = sr_module_data_unlink(&run_cache->data, cmod->mod, 0);
@@ -3652,13 +3690,16 @@ sr_run_cache_update_mod(sr_conn_ctx_t *conn, sr_run_cache_t *run_cache, const st
     }
 
     /* update the cached data ID */
-    cmod->id = mod_cache_id;
+    cmod->id = mod->shm_mod->run_cache_id;
 
 cleanup:
     /* CACHE WRITE UNLOCK */
     sr_rwunlock(&run_cache->lock, SR_RUN_CACHE_LOCK_TIMEOUT, SR_LOCK_WRITE, conn->cid, __func__);
 
+    /* mod data always spent */
     lyd_free_siblings(mod_data);
+    mod->state &= ~MOD_INFO_DATA;
+
     return err_info;
 }
 
@@ -3883,9 +3924,15 @@ sr_error_info_t *
 sr_mkfifo(const char *path, mode_t mode)
 {
     sr_error_info_t *err_info = NULL;
+    gid_t gid;
 
     /* apply umask on mode */
     mode &= ~SR_UMASK;
+
+    /* get GID of the group */
+    if (sr_is_prod_env() && strlen(SR_GROUP) && (err_info = sr_get_gid(SR_GROUP, &gid))) {
+        return err_info;
+    }
 
     /* create the event pipe */
     if (mkfifo(path, mode) == -1) {
@@ -3893,9 +3940,14 @@ sr_mkfifo(const char *path, mode_t mode)
         return err_info;
     }
 
-    /* set correct permissions */
+    /* update perms and group */
     if (chmod(path, mode) == -1) {
         SR_ERRINFO_SYSERRNO(&err_info, "chmod");
+        unlink(path);
+        return err_info;
+    }
+    if (sr_is_prod_env() && strlen(SR_GROUP) && (chown(path, -1, gid) == -1)) {
+        SR_ERRINFO_SYSERRNO(&err_info, "chown");
         unlink(path);
         return err_info;
     }
@@ -4139,7 +4191,7 @@ sr_error_info_t *
 sr_sizedarray2nullarray(const char **sa, const char ***na)
 {
     sr_error_info_t *err_info = NULL;
-    LY_ARRAY_COUNT_TYPE c = LY_ARRAY_COUNT(sa);
+    LYA_COUNT_T c = LYA_COUNT(sa);
 
     if (!sa) {
         *na = NULL;
@@ -4477,14 +4529,18 @@ error:
     return err_info;
 }
 
-char *
-sr_val_sr2ly_str(struct ly_ctx *ctx, const sr_val_t *sr_val, const char *xpath, char *buf, int output)
+sr_error_info_t *
+sr_val_sr2ly_str(struct ly_ctx *ctx, const sr_val_t *sr_val, const char *xpath, char *buf, int output, const char **str)
 {
+    sr_error_info_t *err_info = NULL;
     struct lysc_node_leaf *sleaf;
     const struct lysc_type *t, *t2;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
+
+    *str = NULL;
 
     if (!sr_val) {
+        /* value ignored */
         return NULL;
     }
 
@@ -4497,16 +4553,19 @@ sr_val_sr2ly_str(struct ly_ctx *ctx, const sr_val_t *sr_val, const char *xpath, 
     case SR_INSTANCEID_T:
     case SR_ANYDATA_T:
     case SR_ANYXML_T:
-        return sr_val->data.string_val;
+        *str = sr_val->data.string_val;
+        break;
     case SR_LEAF_EMPTY_T:
-        return NULL;
+        break;
     case SR_BOOL_T:
-        return sr_val->data.bool_val ? "true" : "false";
+        *str = sr_val->data.bool_val ? "true" : "false";
+        break;
     case SR_DECIMAL64_T:
         /* get fraction-digits */
         sleaf = (struct lysc_node_leaf *)lys_find_path(ctx, NULL, xpath, output);
-        if (!sleaf) {
-            return NULL;
+        if (!sleaf || !(sleaf->nodetype & LYD_NODE_TERM)) {
+            /* invalid xpath detected later, value ignored for other node types */
+            break;
         }
         t = sleaf->type;
         if (t->basetype == LY_TYPE_LEAFREF) {
@@ -4514,7 +4573,7 @@ sr_val_sr2ly_str(struct ly_ctx *ctx, const sr_val_t *sr_val, const char *xpath, 
         }
         if (t->basetype == LY_TYPE_UNION) {
             t2 = NULL;
-            LY_ARRAY_FOR(((struct lysc_type_union *)t)->types, u) {
+            LYA_FOR(((struct lysc_type_union *)t)->types, u) {
                 if (((struct lysc_type_union *)t)->types[u]->basetype == LY_TYPE_DEC64) {
                     t2 = ((struct lysc_type_union *)t)->types[u];
                     break;
@@ -4522,38 +4581,57 @@ sr_val_sr2ly_str(struct ly_ctx *ctx, const sr_val_t *sr_val, const char *xpath, 
             }
             t = t2;
         }
-        if (!t) {
-            return NULL;
+        if (!t || (t->basetype != LY_TYPE_DEC64)) {
+            sr_errinfo_new(&err_info, SR_ERR_INVAL_ARG, "Type of node \"%s\" is not \"decimal64\".", sleaf->name);
+            break;
         }
-        sprintf(buf, "%.*f", ((struct lysc_type_dec *)t)->fraction_digits, sr_val->data.decimal64_val);
-        return buf;
+
+        if (snprintf(buf, 22, "%.*f", ((struct lysc_type_dec *)t)->fraction_digits, sr_val->data.decimal64_val) >= 22) {
+            sr_errinfo_new(&err_info, SR_ERR_INVAL_ARG,
+                    "Value %f is not a valid \"decimal64\" value with %" PRIu8 " fraction digits.",
+                    sr_val->data.decimal64_val, ((struct lysc_type_dec *)t)->fraction_digits);
+            break;
+        }
+        *str = buf;
+        break;
     case SR_UINT8_T:
         sprintf(buf, "%" PRIu8, sr_val->data.uint8_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_UINT16_T:
         sprintf(buf, "%" PRIu16, sr_val->data.uint16_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_UINT32_T:
         sprintf(buf, "%" PRIu32, sr_val->data.uint32_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_UINT64_T:
         sprintf(buf, "%" PRIu64, sr_val->data.uint64_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_INT8_T:
         sprintf(buf, "%" PRId8, sr_val->data.int8_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_INT16_T:
         sprintf(buf, "%" PRId16, sr_val->data.int16_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_INT32_T:
         sprintf(buf, "%" PRId32, sr_val->data.int32_val);
-        return buf;
+        *str = buf;
+        break;
     case SR_INT64_T:
         sprintf(buf, "%" PRId64, sr_val->data.int64_val);
-        return buf;
+        *str = buf;
+        break;
     default:
-        return NULL;
+        SR_ERRINFO_INT(&err_info);
+        break;
     }
+
+    return err_info;
 }
 
 sr_error_info_t *
@@ -5854,6 +5932,75 @@ sr_ly_atom_is_foreign(const struct lysc_node *atom, const struct lysc_node *top_
     return NULL;
 }
 
+int
+sr_path_is_val(const char *ptr)
+{
+    int32_t i;
+
+    for (i = -1; isspace(ptr[i]); --i) {}
+    if (ptr[i] != '=') {
+        return 0;
+    }
+
+    if ((ptr[0] == '\'') || (ptr[0] == '\"') || isdigit(ptr[0]) || (ptr[0] == '$')) {
+        return 1;
+    }
+    return 0;
+}
+
+const char *
+sr_path_get_val(const char *ptr, const char *user, const char **val_ptr, uint32_t *val_len)
+{
+    char quot;
+    const char *var_end;
+
+    if ((ptr[0] == '\'') || (ptr[0] == '\"')) {
+        /* quoted val */
+        quot = ptr[0];
+        ++ptr;
+
+        *val_ptr = ptr;
+        while (ptr[0] != quot) {
+            ++ptr;
+        }
+        *val_len = ptr - *val_ptr;
+        ++ptr;
+    } else if ((ptr[0] == '.') || isdigit(ptr[0])) {
+        /* numeric val */
+        *val_ptr = ptr;
+        while ((ptr[0] == '.') || isdigit(ptr[0])) {
+            ++ptr;
+        }
+        *val_len = ptr - *val_ptr;
+    } else {
+        /* variable */
+        assert(ptr[0] == '$');
+        ++ptr;
+
+        if (!user || strncmp(ptr, "USER", 4) || ((ptr[4] != ']') && !isspace(ptr[4]))) {
+            var_end = strchr(ptr, ']');
+            assert(var_end);
+
+            SR_LOG_WRN("Variable \"%.*s\" not defined.", (int)(var_end - ptr), ptr);
+
+            /* will not match anything */
+            *val_ptr = "";
+            *val_len = 0;
+            ptr = var_end;
+        } else {
+            *val_ptr = user;
+            *val_len = strlen(user);
+            ptr += 4;
+        }
+    }
+
+    while (isspace(ptr[0])) {
+        ++ptr;
+    }
+    assert(ptr[0] == ']');
+    return ptr;
+}
+
 sr_error_info_t *
 sr_ly_find_last_parent(struct lyd_node **parent, int nodetype)
 {
@@ -5959,7 +6106,7 @@ sr_module_file_data_append(const struct lys_module *ly_mod, const struct sr_ds_h
         sr_cid_t cid, uint32_t sid, const struct sr_mod_info_xpath_s *xpaths, uint32_t xpath_count, struct lyd_node **data)
 {
     sr_error_info_t *err_info = NULL;
-    struct lyd_node *mod_data;
+    struct lyd_node *mod_data = NULL;
     int modified;
     const char **xps = NULL;
     uint32_t i;
@@ -6271,7 +6418,7 @@ sr_generate_notif_send(sr_conn_ctx_t *conn, sr_mod_t *shm_mod, const struct lyd_
     operation_id = ATOMIC_INC_RELAXED(SR_CONN_MAIN_SHM(conn)->new_operation_id);
 
     /* send the notification (non-validated, must be valid) */
-    err_info = sr_shmsub_notif_notify(conn, notif, notif_ts_mono, notif_ts_real, NULL, NULL, operation_id, 0, 0);
+    err_info = sr_shmsub_notif_notify(conn, notif, notif_ts_mono, notif_ts_real, 0, NULL, NULL, operation_id, 0, 0);
 
     /* NOTIF SUB READ UNLOCK */
     sr_rwunlock(&shm_mod->notif_lock, SR_SHMEXT_SUB_LOCK_TIMEOUT, SR_LOCK_READ, conn->cid, __func__);
@@ -6502,4 +6649,650 @@ sr_generate_notif_module_change_feature(sr_conn_ctx_t *conn, const struct lys_mo
 cleanup:
     lyd_free_siblings(notif);
     sr_errinfo_free(&err_info);
+}
+
+void
+sr_filter_erase(struct sr_filter *filter)
+{
+    uint32_t i;
+
+    for (i = 0; i < filter->count; ++i) {
+        free(filter->filters[i].str);
+    }
+    free(filter->filters);
+    filter->filters = NULL;
+    filter->count = 0;
+}
+
+/**
+ * @brief Learn whether a string is white-space-only.
+ *
+ * @param[in] str String to examine.
+ * @return 1 if there are only white-spaces in @p str;
+ * @return 0 otherwise.
+ */
+static int
+sr_is_strws(const char *str)
+{
+    while (*str) {
+        if (!isspace(*str)) {
+            return 0;
+        }
+        ++str;
+    }
+
+    return 1;
+}
+
+/**
+ * @brief Add another XPath filter into NP2 filter structure.
+ *
+ * @param[in] new_filter New XPath filter to add.
+ * @param[in] type Type of @p new_filter.
+ * @param[in,out] filter Filter structure to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_add_filter(const char *new_filter, enum sr_filter_type type, struct sr_filter *filter)
+{
+    sr_error_info_t *err_info = NULL;
+    void *mem;
+
+    mem = realloc(filter->filters, (filter->count + 1) * sizeof *filter->filters);
+    SR_CHECK_MEM_RET(!mem, err_info);
+    filter->filters = mem;
+    filter->filters[filter->count].str = strdup(new_filter);
+    filter->filters[filter->count].type = type;
+    ++filter->count;
+
+    return NULL;
+}
+
+/**
+ * @brief Append subtree filter metadata to XPath filter string buffer.
+ *
+ * @param[in] node Subtree filter node with the metadata/attributes.
+ * @param[in,out] buf Current XPath filter buffer.
+ * @param[in,out] size Current @p buf size, updated.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_buf_append_attrs(const struct lyd_node *node, char **buf, int *size)
+{
+    sr_error_info_t *err_info = NULL;
+    const struct lyd_meta *m;
+    const struct lyd_attr *a;
+    const struct lys_module *mod;
+    const char *mod_name;
+    int new_size;
+    char *buf_new, quot;
+
+    if (node->schema) {
+        LY_LIST_FOR(node->meta, m) {
+            if (!lyd_metadata_should_print(m)) {
+                continue;
+            }
+            new_size = *size + 2 + strlen(m->annotation->module->name) + 1 + strlen(m->name) + 2 +
+                    strlen(lyd_get_meta_value(m)) + 2;
+            buf_new = realloc(*buf, new_size);
+            SR_CHECK_MEM_RET(!buf_new, err_info);
+            *buf = buf_new;
+            quot = strchr(lyd_get_meta_value(m), '\'') ? '\"' : '\'';
+            sprintf((*buf) + (*size - 1), "[@%s:%s=%c%s%c]", m->annotation->module->name, m->name, quot,
+                    lyd_get_meta_value(m), quot);
+            *size = new_size;
+        }
+    } else {
+        LY_LIST_FOR(((struct lyd_node_opaq *)node)->attr, a) {
+            /* get module name */
+            switch (a->format) {
+            case LY_VALUE_XML:
+                mod = ly_ctx_get_module_implemented_ns(LYD_CTX(node), a->name.module_ns);
+                mod_name = mod ? mod->name : NULL;
+                break;
+            case LY_VALUE_JSON:
+                mod_name = a->name.module_name;
+                break;
+            default:
+                mod_name = NULL;
+                break;
+            }
+
+            new_size = *size + 2;
+            if (mod_name) {
+                new_size += strlen(mod_name) + 1;
+            }
+            new_size += strlen(a->name.name) + 2 + strlen(a->value) + 2;
+            buf_new = realloc(*buf, new_size);
+            SR_CHECK_MEM_RET(!buf_new, err_info);
+            *buf = buf_new;
+
+            quot = strchr(a->value, '\'') ? '\"' : '\'';
+            sprintf((*buf) + (*size - 1), "[@%s%s%s=%c%s%c]", mod_name ? mod_name : "", mod_name ? ":" : "",
+                    a->name.name, quot, a->value, quot);
+            *size = new_size;
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Process a subtree top-level content node and optional attributes.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[in] top_mod Optional top-level module to use.
+ * @param[in,out] filter Filter structure to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_buf_add_top_content(const struct lyd_node *node, const struct lys_module *top_mod,
+        struct sr_filter *filter)
+{
+    sr_error_info_t *err_info = NULL;
+    int size;
+    char *buf = NULL, quot;
+
+    if (!top_mod) {
+        top_mod = lyd_node_module(node);
+    }
+    if (!top_mod) {
+        /* may be an opaque node with invalid module name/prefix */
+        sr_errinfo_new(&err_info, SR_ERR_INVAL_ARG, "Unknown module of node \"%s\".", LYD_NAME(node));
+        goto cleanup;
+    }
+
+    size = 1 + strlen(top_mod->name) + 1 + strlen(LYD_NAME(node)) + 9 + strlen(lyd_get_value(node)) + 3;
+    buf = malloc(size);
+    SR_CHECK_MEM_RET(!buf, err_info);
+    quot = strchr(lyd_get_value(node), '\'') ? '\"' : '\'';
+    sprintf(buf, "/%s:%s[text()=%c%s%c]", top_mod->name, LYD_NAME(node), quot, lyd_get_value(node), quot);
+
+    if ((err_info = sr_filter_xpath_buf_append_attrs(node, &buf, &size))) {
+        goto cleanup;
+    }
+
+    if ((err_info = sr_filter_xpath_add_filter(buf, SR_FILTER_CONTENT, filter))) {
+        goto cleanup;
+    }
+
+cleanup:
+    free(buf);
+    return err_info;
+}
+
+/**
+ * @brief Get the module to print for a node if needed based on JSON instid module inheritence.
+ *
+ * @param[in] node Node that is printed.
+ * @param[in] top_mod Optional top-level module to use.
+ * @param[out] mod Module to print, NULL if none to be printed.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_print_node_module(const struct lyd_node *node, const struct lys_module *top_mod,
+        const struct lys_module **mod)
+{
+    sr_error_info_t *err_info = NULL;
+    const struct lys_module *m;
+    const struct lyd_node *parent;
+    const struct lyd_node_opaq *opaq, *opaq2;
+
+    *mod = NULL;
+
+    parent = lyd_parent(node);
+
+    if (!parent) {
+        /* print the module */
+        if (top_mod) {
+            /* explicit top-level module */
+            *mod = top_mod;
+            return NULL;
+        }
+    } else if (node->schema && parent->schema) {
+        /* 2 data nodes */
+        if (node->schema->module == parent->schema->module) {
+            return NULL;
+        }
+    } else if (node->schema || parent->schema) {
+        /* 1 data node, 1 opaque node */
+        m = node->schema ? node->schema->module : parent->schema->module;
+        opaq = node->schema ? (struct lyd_node_opaq *)parent : (struct lyd_node_opaq *)node;
+
+        switch (opaq->format) {
+        case LY_VALUE_XML:
+            /* one in schema dict, other in data dict, need strcmp */
+            if (opaq->name.module_ns && !strcmp(m->ns, opaq->name.module_ns)) {
+                return NULL;
+            }
+            break;
+        case LY_VALUE_JSON:
+            /* one in schema dict, other in data dict, need strcmp */
+            if (opaq->name.module_name && !strcmp(m->name, opaq->name.module_name)) {
+                return NULL;
+            }
+            break;
+        default:
+            SR_ERRINFO_INT(&err_info);
+            return err_info;
+        }
+    } else {
+        /* 2 opaque nodes */
+        opaq = (struct lyd_node_opaq *)node;
+        opaq2 = (struct lyd_node_opaq *)parent;
+
+        /* in data dict, can compare ptrs */
+        if (opaq->name.module_ns && opaq2->name.module_ns && (opaq->name.module_ns == opaq2->name.module_ns)) {
+            return NULL;
+        }
+    }
+
+    /* module will be printed, get it */
+    m = NULL;
+    if (node->schema) {
+        m = node->schema->module;
+    } else {
+        opaq = (struct lyd_node_opaq *)node;
+        switch (opaq->format) {
+        case LY_VALUE_XML:
+            if (opaq->name.module_ns) {
+                m = ly_ctx_get_module_implemented_ns(LYD_CTX(node), opaq->name.module_ns);
+            }
+            break;
+        case LY_VALUE_JSON:
+            if (opaq->name.module_name) {
+                m = ly_ctx_get_module_implemented(LYD_CTX(node), opaq->name.module_name);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
+    *mod = m;
+    return NULL;
+}
+
+/**
+ * @brief Get value of a node to use in XPath filter.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[out] dynamic Whether the value eneds to be freed.
+ * @return String value to use;
+ * @return NULL on error.
+ */
+static char *
+sr_filter_xpath_buf_get_value(const struct lyd_node *node, int *dynamic)
+{
+    struct lyd_node_opaq *opaq;
+    const char *ptr;
+    const struct lys_module *mod;
+    char *val_str;
+
+    *dynamic = 0;
+
+    if (node->schema) {
+        /* data node, canonical value should be fine */
+        return (char *)lyd_get_value(node);
+    }
+
+    opaq = (struct lyd_node_opaq *)node;
+
+    if (!(ptr = strchr(opaq->value, ':'))) {
+        /* no prefix, use it directly */
+        return (char *)opaq->value;
+    }
+
+    /* assume identity, try to get its module */
+    mod = lys_find_module(LYD_CTX(node), NULL, opaq->value, ptr - opaq->value, opaq->format, opaq->val_prefix_data);
+
+    if (!mod) {
+        /* unknown module, use as is */
+        return (char *)opaq->value;
+    }
+
+    /* print the module name instead of the prefix */
+    if (asprintf(&val_str, "%s:%s", mod->name, ptr + 1) == -1) {
+        return NULL;
+    }
+    *dynamic = 1;
+    return val_str;
+}
+
+/**
+ * @brief Append subtree filter node to XPath filter string buffer.
+ *
+ * Handles content nodes with optional namespace and attributes.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[in,out] buf Current XPath filter buffer.
+ * @param[in,out] size Current @p buf size, updated.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_buf_append_content(const struct lyd_node *node, char **buf, int *size)
+{
+    sr_error_info_t *err_info = NULL;
+    const struct lys_module *mod = NULL;
+    int new_size, dynamic = 0;
+    char *buf_new, *val_str = NULL, quot;
+
+    assert(!node->schema || (node->schema->nodetype & (LYS_LEAF | LYS_LEAFLIST)));
+
+    /* do we print the module name? */
+    if ((err_info = sr_filter_xpath_print_node_module(node, NULL, &mod))) {
+        goto cleanup;
+    }
+
+    new_size = *size + 1 + (mod ? strlen(mod->name) + 1 : 0) + strlen(LYD_NAME(node));
+    buf_new = realloc(*buf, new_size);
+    SR_CHECK_MEM_GOTO(!buf_new, err_info, cleanup);
+    *buf = buf_new;
+    sprintf((*buf) + (*size - 1), "[%s%s%s", (mod ? mod->name : ""), (mod ? ":" : ""), LYD_NAME(node));
+    *size = new_size;
+
+    if ((err_info = sr_filter_xpath_buf_append_attrs(node, buf, size))) {
+        goto cleanup;
+    }
+
+    /* get proper value */
+    if (!(val_str = sr_filter_xpath_buf_get_value(node, &dynamic))) {
+        SR_ERRINFO_MEM(&err_info);
+        goto cleanup;
+    }
+
+    new_size = *size + 2 + strlen(val_str) + 2;
+    buf_new = realloc(*buf, new_size);
+    SR_CHECK_MEM_GOTO(!buf_new, err_info, cleanup);
+    *buf = buf_new;
+
+    /* learn which quotes are safe to use */
+    if (strchr(val_str, '\'')) {
+        quot = '\"';
+    } else {
+        quot = '\'';
+    }
+
+    /* append */
+    sprintf((*buf) + (*size - 1), "=%c%s%c]", quot, val_str, quot);
+    *size = new_size;
+
+cleanup:
+    if (dynamic) {
+        free(val_str);
+    }
+    return err_info;
+}
+
+/**
+ * @brief Append subtree filter node to XPath filter string buffer.
+ *
+ * Handles containment/selection nodes with namespace and optional attributes.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[in] top_mod Optional top-level module to use.
+ * @param[in,out] buf Current XPath filter buffer.
+ * @param[in,out] size Current @p buf size, updated.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_buf_append_node(const struct lyd_node *node, const struct lys_module *top_mod, char **buf, int *size)
+{
+    sr_error_info_t *err_info = NULL;
+    const struct lys_module *mod = NULL;
+    int new_size;
+    char *buf_new;
+
+    /* do we print the module name? */
+    if ((err_info = sr_filter_xpath_print_node_module(node, top_mod, &mod))) {
+        return err_info;
+    }
+
+    new_size = *size + 1 + (mod ? strlen(mod->name) + 1 : 0) + strlen(LYD_NAME(node));
+    buf_new = realloc(*buf, new_size);
+    SR_CHECK_MEM_RET(!buf_new, err_info);
+    *buf = buf_new;
+    sprintf((*buf) + (*size - 1), "/%s%s%s", (mod ? mod->name : ""), (mod ? ":" : ""), LYD_NAME(node));
+    *size = new_size;
+
+    if ((err_info = sr_filter_xpath_buf_append_attrs(node, buf, size))) {
+        return err_info;
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Process a subtree filter node by constructing an XPath filter string and adding it
+ * to a filter structure, recursively.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[in] top_mod Optional top-level module to use.
+ * @param[in,out] buf Current XPath filter buffer.
+ * @param[in] size Current @p buf size.
+ * @param[in,out] filter Filter structure to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_buf_add_r(const struct lyd_node *node, const struct lys_module *top_mod, char **buf, int size,
+        struct sr_filter *filter)
+{
+    sr_error_info_t *err_info = NULL;
+    const struct lyd_node *child;
+    int only_content_match, s;
+    enum sr_filter_type type;
+
+    /* containment node or selection node */
+    if ((err_info = sr_filter_xpath_buf_append_node(node, top_mod, buf, &size))) {
+        return err_info;
+    }
+
+    if (!lyd_child(node)) {
+        /* just a selection node */
+        return sr_filter_xpath_add_filter(*buf, SR_FILTER_SELECTION, filter);
+    }
+
+    /* append child content match nodes */
+    only_content_match = 1;
+    LY_LIST_FOR(lyd_child(node), child) {
+        if (lyd_get_value(child) && !sr_is_strws(lyd_get_value(child))) {
+            /* there is a content filter, append all of them */
+            if ((err_info = sr_filter_xpath_buf_append_content(child, buf, &size))) {
+                return err_info;
+            }
+        } else {
+            /* can no longer be just a content match */
+            only_content_match = 0;
+        }
+    }
+
+    if (only_content_match) {
+        /* there are only content match nodes so we retrieve this filter as a subtree */
+        return sr_filter_xpath_add_filter(*buf, SR_FILTER_CONTENT, filter);
+    }
+    /* else there are some other filters so the current filter just restricts all the nested ones, is not retrieved
+     * as a standalone subtree */
+
+    /* that is it for this filter depth, now we branch with every new node */
+    LY_LIST_FOR(lyd_child(node), child) {
+        if (lyd_child(child)) {
+            /* child containment node */
+            if ((err_info = sr_filter_xpath_buf_add_r(child, NULL, buf, size, filter))) {
+                return err_info;
+            }
+        } else {
+            /* child selection node or content node (both should be included in the output), keep the current size
+             * because buf will be reused */
+            s = size;
+            if ((err_info = sr_filter_xpath_buf_append_node(child, NULL, buf, &s))) {
+                return err_info;
+            }
+            if (!s) {
+                continue;
+            }
+
+            type = (lyd_get_value(child) && !sr_is_strws(lyd_get_value(child))) ? SR_FILTER_CONTENT : SR_FILTER_SELECTION;
+            if ((err_info = sr_filter_xpath_add_filter(*buf, type, filter))) {
+                return err_info;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief Process a top-level subtree filter node.
+ *
+ * @param[in] node Subtree filter node.
+ * @param[in] top_mod Optional top-level module to use.
+ * @param[in,out] filter Filter structure to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_filter_xpath_create_top(const struct lyd_node *node, const struct lys_module *top_mod, struct sr_filter *filter)
+{
+    sr_error_info_t *err_info = NULL;
+    char *buf = NULL;
+
+    if (lyd_get_value(node) && !sr_is_strws(lyd_get_value(node))) {
+        /* special case of top-level content match node */
+        err_info = sr_filter_xpath_buf_add_top_content(node, top_mod, filter);
+    } else {
+        /* containment or selection node */
+        err_info = sr_filter_xpath_buf_add_r(node, top_mod, &buf, 1, filter);
+    }
+
+    free(buf);
+    return err_info;
+}
+
+sr_error_info_t *
+sr_filter_create_subtree(const struct lyd_node *node, struct sr_filter *filter)
+{
+    sr_error_info_t *err_info = NULL;
+    int match;
+    const struct lyd_node *iter;
+    const struct lys_module *mod;
+    const struct lysc_node *snode;
+    uint32_t idx;
+
+    LY_LIST_FOR(node, iter) {
+        if (!iter->schema && !((struct lyd_node_opaq *)iter)->name.prefix) {
+            /* no top-level namespace, generate all possible XPaths */
+            match = 0;
+            idx = 0;
+            while ((mod = ly_ctx_get_module_iter(LYD_CTX(iter), &idx))) {
+                if (!mod->implemented) {
+                    continue;
+                }
+
+                snode = NULL;
+                while ((snode = lys_getnext(snode, NULL, mod->compiled, 0))) {
+                    if (!strcmp(snode->name, ((struct lyd_node_opaq *)iter)->name.name)) {
+                        /* match */
+                        match = 1;
+                        if ((err_info = sr_filter_xpath_create_top(iter, mod, filter))) {
+                            goto cleanup;
+                        }
+                    }
+                }
+            }
+
+            if (!match) {
+                sr_errinfo_new(&err_info, SR_ERR_INVAL_ARG,
+                        "Subtree filter node \"%s\" without a namespace does not match any YANG nodes.", LYD_NAME(iter));
+                goto cleanup;
+            }
+        } else {
+            /* iter has a valid schema/namespace */
+            if ((err_info = sr_filter_xpath_create_top(iter, NULL, filter))) {
+                goto cleanup;
+            }
+        }
+    }
+
+cleanup:
+    if (err_info) {
+        sr_filter_erase(filter);
+    }
+    return err_info;
+}
+
+/**
+ * @brief Append string to another string by enlarging it.
+ *
+ * @param[in] str String to append.
+ * @param[in,out] ret String to append to, is enlarged.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+sr_append_str(const char *str, char **ret)
+{
+    sr_error_info_t *err_info = NULL;
+    void *mem;
+    int len;
+
+    if (!*ret) {
+        *ret = strdup(str);
+        SR_CHECK_MEM_RET(!*ret, err_info);
+    } else {
+        len = strlen(*ret);
+        mem = realloc(*ret, len + strlen(str) + 1);
+        SR_CHECK_MEM_RET(!mem, err_info);
+        *ret = mem;
+        strcat(*ret + len, str);
+    }
+
+    return NULL;
+}
+
+sr_error_info_t *
+sr_filter_filter2xpath(const struct sr_filter *filter, int for_eval, char **xpath)
+{
+    sr_error_info_t *err_info = NULL;
+    uint32_t i;
+
+    *xpath = NULL;
+
+    /* single filter */
+    if (filter->count == 1) {
+        err_info = sr_append_str(filter->filters[0].str, xpath);
+        goto cleanup;
+    }
+
+    /* combine all filters into one */
+    for (i = 0; i < filter->count; ++i) {
+        if (!*xpath) {
+            if ((err_info = sr_append_str("(", xpath))) {
+                goto cleanup;
+            }
+
+            if ((err_info = sr_append_str(filter->filters[i].str, xpath))) {
+                goto cleanup;
+            }
+        } else {
+            if ((err_info = sr_append_str(for_eval ? " and " : " | ", xpath))) {
+                goto cleanup;
+            }
+
+            if ((err_info = sr_append_str(filter->filters[i].str, xpath))) {
+                goto cleanup;
+            }
+        }
+    }
+
+    if (*xpath) {
+        /* finish parentheses */
+        if ((err_info = sr_append_str(")", xpath))) {
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    if (err_info) {
+        free(*xpath);
+        *xpath = NULL;
+    }
+    return err_info;
 }

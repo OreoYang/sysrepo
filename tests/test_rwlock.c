@@ -121,7 +121,7 @@ test_unsubscribe_retry(void **arg)
     assert_int_equal(ret, SR_ERR_OK);
 
     ret = sr_apply_changes(st->sess, 100);
-    assert_int_equal(ret, SR_ERR_OK);
+    assert_int_equal(ret, SR_ERR_OK_CALLBACK_FAILED);
 
     /* timeout due to slow cb */
     ret = sr_unsubscribe(subscr);
@@ -200,6 +200,6 @@ main(void)
 
     setenv("CMOCKA_TEST_ABORT", "1", 1);
     setenv("SR_TEST_LOG_DEBUG", "1", 1);
-    test_log_init();
+    test_init();
     return cmocka_run_group_tests(tests, setup_f, teardown_f);
 }

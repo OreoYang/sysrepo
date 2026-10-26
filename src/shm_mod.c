@@ -46,8 +46,7 @@ sr_error_info_t *
 sr_shmmod_open(sr_shm_t *shm, int zero)
 {
     sr_error_info_t *err_info = NULL;
-    char *shm_name = NULL, buf[8], *ret = NULL;
-    FILE *f;
+    char *shm_name = NULL;
 
     err_info = sr_path_mod_shm(&shm_name);
     if (err_info) {
@@ -58,18 +57,7 @@ sr_shmmod_open(sr_shm_t *shm, int zero)
     free(shm_name);
     if (shm->fd == -1) {
         sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to open mod shared memory (%s).", strerror(errno));
-        if ((errno == EACCES) && !geteuid()) {
-            /* check kernel parameter value of fs.protected_regular */
-            f = fopen("/proc/sys/fs/protected_regular", "r");
-            if (f) {
-                ret = fgets(buf, sizeof(buf), f);
-                fclose(f);
-            }
-        }
-        if (ret && (atoi(buf) != 0)) {
-            sr_errinfo_new(&err_info, SR_ERR_SYS, "Caused by kernel parameter \"fs.protected_regular\", "
-                    "which must be \"0\" (currently \"%d\").", atoi(buf));
-        }
+        sr_errinfo_new_sudo_eaccess(&err_info);
         goto error;
     }
 
@@ -927,14 +915,16 @@ cleanup:
  * @param[in] cid Connection ID of the push oper data.
  * @param[in] sid Session ID of the push oper data.
  * @param[in] has_data Flag set of the push oper data.
+ * @param[in,out] data Optional, removed oper data previously stored, appended to.
  * @return err_info, NULL on success.
  */
 static sr_error_info_t *
 sr_shmmod_del_module_sess_oper_data(sr_conn_ctx_t *conn, const struct lys_module *ly_mod, sr_mod_t *shm_mod,
-        sr_cid_t cid, uint32_t sid, int has_data)
+        sr_cid_t cid, uint32_t sid, int has_data, struct lyd_node **data)
 {
     sr_error_info_t *err_info = NULL;
     const struct sr_ds_handle_s *oper_ds_handle;
+    struct lyd_node *mod_data = NULL;
 
     if (has_data) {
         /* get DS handle */
@@ -943,7 +933,20 @@ sr_shmmod_del_module_sess_oper_data(sr_conn_ctx_t *conn, const struct lys_module
             goto cleanup;
         }
 
-        /* store the empty data */
+        if (data) {
+            /* get the current data */
+            if ((err_info = oper_ds_handle->plugin->load_cb(ly_mod, SR_DS_OPERATIONAL, cid, sid, NULL, 0,
+                    oper_ds_handle->plg_data, &mod_data))) {
+                goto cleanup;
+            }
+            if ((err_info = sr_lyd_merge_module(data, mod_data, ly_mod, sr_oper_data_merge_cb, NULL,
+                    LYD_MERGE_DESTRUCT | LYD_MERGE_WITH_FLAGS))) {
+                goto cleanup;
+            }
+            mod_data = NULL;
+        }
+
+        /* store empty data */
         if ((err_info = oper_ds_handle->plugin->store_prepare_cb(ly_mod, SR_DS_OPERATIONAL, cid, sid, NULL,
                 NULL, oper_ds_handle->plg_data))) {
             goto cleanup;
@@ -961,12 +964,13 @@ sr_shmmod_del_module_sess_oper_data(sr_conn_ctx_t *conn, const struct lys_module
     }
 
 cleanup:
+    lyd_free_siblings(mod_data);
     return err_info;
 }
 
 sr_error_info_t *
 sr_shmmod_del_module_oper_data(sr_conn_ctx_t *conn, const struct lys_module *ly_mod, uint32_t *mod_state,
-        sr_mod_t *shm_mod, int dead_only)
+        sr_mod_t *shm_mod, int dead_only, struct lyd_node **data)
 {
     sr_error_info_t *err_info = NULL, *tmp_err;
     struct sr_mod_lock_s *shm_lock;
@@ -1028,7 +1032,7 @@ sr_shmmod_del_module_oper_data(sr_conn_ctx_t *conn, const struct lys_module *ly_
 
         /* discard these oper changes and/or only mod SHM push oper data entry */
         if ((err_info = sr_shmmod_del_module_sess_oper_data(conn, ly_mod, shm_mod, oper_push_l[i].cid,
-                oper_push_l[i].sid, oper_push_l[i].has_data))) {
+                oper_push_l[i].sid, oper_push_l[i].has_data, data))) {
             goto cleanup_unlock;
         }
     }
@@ -1197,7 +1201,15 @@ cleanup:
     return err_info;
 }
 
-sr_error_info_t *
+/**
+ * @brief Collect dependent modules from a leafref dependency.
+ *
+ * @param[in] taregt_path Target leafref path.
+ * @param[in] target_module Target module name.
+ * @param[in,out] mod_info Mod info to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
 sr_shmmod_collect_deps_lref(const char *target_path, const char *target_module, struct sr_mod_info_s *mod_info)
 {
     sr_error_info_t *err_info = NULL;
@@ -1215,7 +1227,16 @@ sr_shmmod_collect_deps_lref(const char *target_path, const char *target_module, 
     return NULL;
 }
 
-sr_error_info_t *
+/**
+ * @brief Collect dependent modules from an instance-identifier dependency.
+ *
+ * @param[in] source_path Source inst-id path.
+ * @param[in] default_target_path Optional inst-id default value.
+ * @param[in] data Instantiated data.
+ * @param[in,out] mod_info Mod info to add to.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
 sr_shmmod_collect_deps_instid(const char *source_path, const char *default_target_path, const struct lyd_node *data,
         struct sr_mod_info_s *mod_info)
 {

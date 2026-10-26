@@ -32,17 +32,6 @@
 #include "sysrepo.h"
 
 /**
- * @brief Internal filter structure.
- */
-struct srsn_filter {
-    struct {
-        char *str;      /**< filter string */
-        int selection;  /**< selection or content filter */
-    } *filters;
-    uint32_t count;
-};
-
-/**
  * @brief Internal timer structure.
  */
 struct srsn_timer {
@@ -70,6 +59,9 @@ struct srsn_dispatch_arg {
     sr_conn_ctx_t *conn;
     srsn_notif_cb cb;
 };
+
+/** @brief Maximum accepted notification LYB size, a larger one means a desynchronized stream. */
+#define SRSN_MAX_FRAME_SIZE (256 * 1024 * 1024)
 
 /**
  * @brief Complete operational information about the subscriptions.
@@ -141,32 +133,6 @@ struct srsn_state {
     uint32_t pfd_count;
     uint32_t valid_pfds;    /**< count of current valid (fd > -1) pfd items */
 };
-
-/**
- * @brief Erase all members of a filter structure.
- *
- * @param[in] filter Filter to erase.
- */
-void srsn_filter_erase(struct srsn_filter *filter);
-
-/**
- * @brief Create a filter structure from a subtree filter.
- *
- * @param[in] node Subtree filter.
- * @param[in,out] ev_sess SR event session to set the error on.
- * @param[in,out] filter Generated filter structure.
- * @return err_info, NULL on success.
- */
-sr_error_info_t *srsn_filter_create_subtree(const struct lyd_node *node, struct srsn_filter *filter);
-
-/**
- * @brief Transform a filter structure into XPath filter.
- *
- * @param[in] filter Filter structure.
- * @param[out] xpath Generated XPath filter.
- * @return err_info, NULL on success.
- */
-sr_error_info_t *srsn_filter_filter2xpath(const struct srsn_filter *filter, char **xpath);
 
 /**
  * @brief Generate a new unique subscription ID.
@@ -348,11 +314,28 @@ sr_error_info_t *srsn_dispatch_init(sr_conn_ctx_t *conn, srsn_notif_cb cb);
 /**
  * @brief Add another FD handled by notification dispatch.
  *
+ * On success @p fd is owned by the dispatch, on error it is not registered and stays owned by the caller.
+ *
  * @param[in] fd Subscription FD.
  * @param[in] cb_data Callback data for @p fd.
  * @return err_info, NULL on success.
  */
 sr_error_info_t *srsn_dispatch_add(int fd, void *cb_data);
+
+/**
+ * @brief Remove an FD handled by notification dispatch and close it.
+ *
+ * Blocks until no callback is being processed, so on return the callback of @p fd is neither running
+ * nor can be called again and its callback data can be freed.
+ *
+ * Removing an FD that is not handled by the dispatch is not an error, the dispatch thread removes FDs
+ * itself once the peer closes them and there is no way for the caller to learn about it, so both cases
+ * are indistinguishable here and the guarantees above hold either way.
+ *
+ * @param[in] fd Subscription FD.
+ * @return err_info, NULL on success.
+ */
+sr_error_info_t *srsn_dispatch_del(int fd);
 
 /**
  * @brief Get the current count of subscriptions handled by dispatch.

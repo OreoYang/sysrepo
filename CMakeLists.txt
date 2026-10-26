@@ -53,23 +53,23 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 # Generic version of not only the library. Major version is reserved for really big changes of the project,
 # minor version changes with added functionality (new tool, functionality of the tool or library, ...) and
 # micro version is changed with a set of small changes or bugfixes anywhere in the project.
-set(SYSREPO_MAJOR_VERSION 4)
-set(SYSREPO_MINOR_VERSION 5)
-set(SYSREPO_MICRO_VERSION 4)
+set(SYSREPO_MAJOR_VERSION 5)
+set(SYSREPO_MINOR_VERSION 2)
+set(SYSREPO_MICRO_VERSION 27)
 set(SYSREPO_VERSION ${SYSREPO_MAJOR_VERSION}.${SYSREPO_MINOR_VERSION}.${SYSREPO_MICRO_VERSION})
 
 # Version of the library
 # Major version is changed with every backward non-compatible API/ABI change, minor version changes
 # with backward compatible change and micro version is connected with any internal change of the library.
 set(SYSREPO_MAJOR_SOVERSION 8)
-set(SYSREPO_MINOR_SOVERSION 4)
-set(SYSREPO_MICRO_SOVERSION 8)
+set(SYSREPO_MINOR_SOVERSION 11)
+set(SYSREPO_MICRO_SOVERSION 3)
 set(SYSREPO_SOVERSION_FULL ${SYSREPO_MAJOR_SOVERSION}.${SYSREPO_MINOR_SOVERSION}.${SYSREPO_MICRO_SOVERSION})
 set(SYSREPO_SOVERSION ${SYSREPO_MAJOR_SOVERSION})
 
 # Version of libyang library that this sysrepo depends on
-set(LIBYANG_DEP_VERSION 5.1.1)
-set(LIBYANG_DEP_SOVERSION 5.1.1)
+set(LIBYANG_DEP_VERSION 6.4.9)
+set(LIBYANG_DEP_SOVERSION 5.11.7)
 set(LIBYANG_DEP_SOVERSION_MAJOR 5)
 
 # generate only version header, it is needed for docs
@@ -97,9 +97,34 @@ option(ENABLE_DS_REDIS "Enable Redis datastore plugin" OFF)
 option(ENABLE_SYSREPOCTL "Build binary tool 'sysrepoctl'" ON)
 option(ENABLE_SYSREPOCFG "Build binary tool 'sysrepocfg'" ON)
 option(ENABLE_SYSREPO_PLUGIND "Build binary daemon 'sysrepo-plugind'" ON)
+option(ENABLE_SYSREPO_NOTIFD "Build binary daemon 'sysrepo-notifd'" ON)
 option(BUILD_SHARED_LIBS "By default, shared libs are enabled. Turn off for a static build." ON)
 option(INSTALL_SYSCTL_CONF "Install sysctl conf file to allow shared access to SHM files." OFF)
+option(REPO_SHM_SETUP "Initialize repository and SHM files (as non-privileged user is using 'sudo')" ON)
+
+# notifd setup options
+option(NOTIFD_SETUP "Install required modules with their default configuration into sysrepo using a script" ON)
+set(NOTIFD_MODULE_PERMS 600 CACHE STRING "File access permissions set for the notifd modules")
+if(NOT NOTIFD_MODULE_OWNER)
+    execute_process(COMMAND id -un RESULT_VARIABLE RET
+    OUTPUT_VARIABLE NOTIFD_MODULE_OWNER OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ERROR_STR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(RET)
+        message(WARNING "Learning notifd module user failed (${ERROR_STR}), the current user will be used.")
+    endif()
+endif()
+set(NOTIFD_MODULE_OWNER "${NOTIFD_MODULE_OWNER}" CACHE STRING "System user that will become the owner of notifd modules, empty means the current user")
+if(NOT NOTIFD_MODULE_GROUP AND NOTIFD_MODULE_OWNER)
+    execute_process(COMMAND id -gn ${NOTIFD_MODULE_OWNER} RESULT_VARIABLE RET
+    OUTPUT_VARIABLE NOTIFD_MODULE_GROUP OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ERROR_STR OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(RET)
+        message(WARNING "Learning notifd module group failed (${ERROR_STR}), the current user group will be used.")
+    endif()
+endif()
+set(NOTIFD_MODULE_GROUP "${NOTIFD_MODULE_GROUP}" CACHE STRING "System group that the notifd modules will belong to, empty means the current user group")
 set(YANG_MODULE_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/yang/modules/sysrepo" CACHE STRING "Directory where to copy the YANG modules to.")
+set(DATA_DIR "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/sysrepo" CACHE STRING "Directory with shared sysrepo data.")
 set(INTERNAL_MODULE_DATA_PATH "" CACHE STRING "Path to a file with startup and factory-default data of internal modules. Contents of the file are compiled into the library.")
 if(INTERNAL_MODULE_DATA_PATH)
     if(NOT EXISTS "${INTERNAL_MODULE_DATA_PATH}")
@@ -123,6 +148,7 @@ else()
     set(INTERNAL_MODULE_DATA_FORMAT LYD_XML)
 endif()
 set(INTERNAL_MODULE_DISABLED_RUNNING "" CACHE STRING "List of internal sysrepo or libyang modules that will have their 'running' datastores disabled (always mirroring 'startup'), separated by space. Use '*' for all the modules.")
+set(JSON_NOTIF_FILE_MAX_SIZE 1024 CACHE STRING "Notification file will never exceed this size (kB).")
 
 # default datastore plugins
 set(DEFAULT_STARTUP_DS_PLG "JSON DS file" CACHE STRING "Default datastore plugin for storing startup data.")
@@ -264,6 +290,7 @@ set(LIB_SRC
     src/plugins/ds_json.c
     src/plugins/ntf_json.c
     src/plugins/common_json.c
+    src/utils/private_candidate.c
     src/utils/values.c
     src/utils/xpath.c
     src/utils/error_format.c
@@ -284,6 +311,13 @@ set(SYSREPOPLUGIND_SRC
     src/executables/srpd_common.c
     src/executables/sysrepo-plugind.c)
 
+set(SYSREPONOTIFD_SRC
+    src/executables/sysrepo-notifd/main.c
+    src/executables/sysrepo-notifd/notifd_config.c
+    src/executables/sysrepo-notifd/notifd_dispatch.c
+    src/executables/sysrepo-notifd/notifd_runtime.c
+    src/executables/sysrepo-notifd/notifd_udp.c)
+
 # public headers to check API/ABI on
 set(LIB_MAIN_HEADERS
     src/sysrepo.h
@@ -291,6 +325,7 @@ set(LIB_MAIN_HEADERS
 set(LIB_UTIL_HEADERS
     src/plugins_datastore.h
     src/plugins_notification.h
+    src/utils/private_candidate.h
     src/utils/values.h
     src/utils/xpath.h
     src/utils/error_format.h
@@ -316,15 +351,21 @@ set(FORMAT_SOURCES
     compat/*.h*
     examples/*.c
     examples/plugin/*.c
+    examples/notifd/*.c
     src/*.c
     src/*.h
     src/executables/*.c
     src/executables/*.h*
+    src/executables/sysrepo-notifd/*.c
+    src/executables/sysrepo-notifd/*.h*
     src/plugins/*.c
     src/plugins/*.h*
-    src/utils/*
+    src/utils/*.c
+    src/utils/*.h*
     tests/*.c
-    tests/*.c)
+    tests/*.h*
+    tests/notifd/*.c
+    tests/notifd/*.h)
 
 #
 # checks
@@ -533,6 +574,12 @@ if(ENABLE_SYSREPO_PLUGIND)
     target_link_libraries(sysrepo-plugind sysrepo)
 endif()
 
+if(ENABLE_SYSREPO_NOTIFD)
+    # sysrepo-notifd daemon
+    add_executable(sysrepo-notifd ${SYSREPONOTIFD_SRC} ${compatsrc})
+    target_link_libraries(sysrepo-notifd sysrepo)
+endif()
+
 # include repository files with highest priority
 include_directories("${PROJECT_SOURCE_DIR}/src")
 include_directories("${PROJECT_SOURCE_DIR}/src/plugins")
@@ -572,6 +619,9 @@ if(LIBSYSTEMD_FOUND)
     if(ENABLE_SYSREPO_PLUGIND)
         target_link_libraries(sysrepo-plugind ${LIBSYSTEMD_LIBRARIES})
     endif()
+    if(ENABLE_SYSREPO_NOTIFD)
+        target_link_libraries(sysrepo-notifd ${LIBSYSTEMD_LIBRARIES})
+    endif()
     include_directories(${LIBSYSTEMD_INCLUDE_DIRS})
     message(STATUS "systemd system service unit path: ${SYSTEMD_UNIT_DIR}")
 else()
@@ -590,11 +640,27 @@ if(NOT TAR_BINARY)
     message(FATAL_ERROR "tar binary was not found.")
 endif()
 
+if(NOTIFD_SETUP)
+    if(ENABLE_SYSREPOCTL)
+        # use the just-built sysrepoctl
+        set(SYSREPOCTL_EXECUTABLE "${PROJECT_BINARY_DIR}/sysrepoctl")
+    else()
+        # find sysrepoctl on the system
+        if(NOT SYSREPOCTL_EXECUTABLE)
+            find_program(SYSREPOCTL_EXECUTABLE sysrepoctl)
+        endif()
+        if(NOT SYSREPOCTL_EXECUTABLE)
+            message(FATAL_ERROR "Unable to find sysrepoctl, set SYSREPOCTL_EXECUTABLE manually to be able to setup sysrepo-notifd.")
+        endif()
+    endif()
+endif()
+
 # generate files
 configure_file("${PROJECT_SOURCE_DIR}/src/config.h.in" "${PROJECT_BINARY_DIR}/config.h" ESCAPE_QUOTES @ONLY)
 configure_file("${PROJECT_SOURCE_DIR}/sysrepo.pc.in" "${PROJECT_BINARY_DIR}/sysrepo.pc" @ONLY)
 configure_file("${PROJECT_SOURCE_DIR}/src/executables/bin_common.h.in" "${PROJECT_BINARY_DIR}/bin_common.h" ESCAPE_QUOTES @ONLY)
 configure_file("${PROJECT_SOURCE_DIR}/src/executables/sysrepo-plugind.service.in" "${PROJECT_BINARY_DIR}/sysrepo-plugind.service" @ONLY)
+configure_file("${PROJECT_SOURCE_DIR}/src/executables/sysrepo-notifd/sysrepo-notifd.service.in" "${PROJECT_BINARY_DIR}/sysrepo-notifd.service" @ONLY)
 
 # copy public headers
 file(COPY ${LIB_MAIN_HEADERS} DESTINATION "${PROJECT_BINARY_DIR}/include")
@@ -605,6 +671,7 @@ file(GLOB yangs "${PROJECT_SOURCE_DIR}/modules/*.yang")
 install(FILES ${yangs} DESTINATION ${YANG_MODULE_DIR})
 file(GLOB sn_yangs "${PROJECT_SOURCE_DIR}/modules/subscribed_notifications/*.yang")
 install(FILES ${sn_yangs} DESTINATION ${YANG_MODULE_DIR})
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/scripts/" DESTINATION ${DATA_DIR}/scripts USE_SOURCE_PERMISSIONS)
 
 install(TARGETS sysrepo DESTINATION ${CMAKE_INSTALL_LIBDIR})
 install(FILES ${PROJECT_BINARY_DIR}/include/sysrepo.h ${PROJECT_BINARY_DIR}/include/sysrepo_types.h
@@ -629,15 +696,65 @@ if(ENABLE_SYSREPO_PLUGIND)
     install(FILES ${PROJECT_SOURCE_DIR}/src/executables/sysrepo-plugind.8 DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
     install(DIRECTORY DESTINATION ${SRPD_PLUGINS_PATH})
 endif()
+if(ENABLE_SYSREPO_NOTIFD)
+    install(TARGETS sysrepo-notifd DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES ${PROJECT_SOURCE_DIR}/src/executables/sysrepo-notifd/sysrepo-notifd.8
+            DESTINATION ${CMAKE_INSTALL_MANDIR}/man8)
+endif()
 if(SR_HAVE_DLOPEN)
     install(DIRECTORY DESTINATION ${SR_PLUGINS_PATH})
 endif()
 if(SR_HAVE_SYSTEMD AND ENABLE_SYSREPO_PLUGIND)
     install(FILES ${PROJECT_BINARY_DIR}/sysrepo-plugind.service DESTINATION ${SYSTEMD_UNIT_DIR})
 endif()
+if(SR_HAVE_SYSTEMD AND ENABLE_SYSREPO_NOTIFD)
+    install(FILES ${PROJECT_BINARY_DIR}/sysrepo-notifd.service DESTINATION ${SYSTEMD_UNIT_DIR})
+endif()
 
 if(INSTALL_SYSCTL_CONF)
     install(FILES "${PROJECT_SOURCE_DIR}/zz-sysrepo-disable-fs-protected_regular.conf" DESTINATION "${CMAKE_INSTALL_PREFIX}/lib/sysctl.d/")
+endif()
+
+if(REPO_SHM_SETUP)
+    install(CODE "
+        message(STATUS \"Initializing sysrepo repository and SHM files (setup_repo_shm.sh)...\")
+        set(ENV{SYSREPOCTL_EXECUTABLE} \"${SYSREPOCTL_EXECUTABLE}\")
+        execute_process(COMMAND \"\$ENV{DESTDIR}${DATA_DIR}/scripts/setup_repo_shm.sh\"
+                RESULT_VARIABLE CMD_RES
+                OUTPUT_VARIABLE CMD_OUT
+                ERROR_VARIABLE CMD_ERR
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_STRIP_TRAILING_WHITESPACE)
+        if(NOT CMD_RES EQUAL 0)
+            string(REPLACE \"\\n\" \"\\n \" CMD_OUT_F \"\${CMD_OUT}\")
+            string(REPLACE \"\\n\" \"\\n \" CMD_ERR_F \"\${CMD_ERR}\")
+            message(FATAL_ERROR \" OUTPUT:\\n \${CMD_OUT_F}\\n ERROR:\\n \${CMD_ERR_F}\")
+        endif()
+    ")
+endif()
+
+if (NOTIFD_SETUP)
+    install(CODE "
+        message(STATUS \"Installing notifd sysrepo modules (setup_notifd.sh)...\")
+        set(ENV{SR_NOTIFD_MODULE_DIR} \"${YANG_MODULE_DIR}\")
+        set(ENV{SR_NOTIFD_MODULE_PERMS} \"${NOTIFD_MODULE_PERMS}\")
+        set(ENV{SR_NOTIFD_MODULE_OWNER} \"${NOTIFD_MODULE_OWNER}\")
+        set(ENV{SR_NOTIFD_MODULE_GROUP} \"${NOTIFD_MODULE_GROUP}\")
+        set(ENV{SYSREPOCTL_EXECUTABLE} \"${SYSREPOCTL_EXECUTABLE}\")
+        execute_process(COMMAND \"\$ENV{DESTDIR}${DATA_DIR}/scripts/setup_notifd.sh\"
+                RESULT_VARIABLE CMD_RES
+                OUTPUT_VARIABLE CMD_OUT
+                ERROR_VARIABLE CMD_ERR
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_STRIP_TRAILING_WHITESPACE)
+        if(NOT CMD_RES EQUAL 0)
+            string(REPLACE \"\\n\" \"\\n \" CMD_OUT_F \"\${CMD_OUT}\")
+            string(REPLACE \"\\n\" \"\\n \" CMD_ERR_F \"\${CMD_ERR}\")
+            message(FATAL_ERROR \" OUTPUT:\\n \${CMD_OUT_F}\\n ERROR:\\n \${CMD_ERR_F}\")
+        endif()
+    ")
+else()
+    message(WARNING "sysrepo-notifd will refuse to start if the modules are not installed!")
 endif()
 
 # tests
@@ -713,7 +830,13 @@ endif()
 
 # uninstall
 if(ENABLE_COMMON_TARGETS)
-    add_custom_target(uninstall "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/uninstall.cmake")
+    if(NOTIFD_SETUP)
+        add_custom_target(uninstall ${DATA_DIR}/scripts/remove_notifd.sh
+            COMMAND "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/uninstall.cmake"
+            COMMENT "Removing notifd modules from sysrepo...")
+    else()
+        add_custom_target(uninstall "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/uninstall.cmake")
+    endif()
 endif()
 add_custom_target(uninstall_with_repo "${CMAKE_COMMAND}" -P "${CMAKE_MODULE_PATH}/uninstall.cmake"
     COMMAND rm -rf ${REPO_PATH})

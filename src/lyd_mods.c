@@ -4,8 +4,8 @@
  * @brief Sysrepo module data routines
  *
  * @copyright
- * Copyright (c) 2018 - 2023 Deutsche Telekom AG.
- * Copyright (c) 2018 - 2023 CESNET, z.s.p.o.
+ * Copyright (c) 2018 - 2026 Deutsche Telekom AG.
+ * Copyright (c) 2018 - 2026 CESNET, z.s.p.o.
  *
  * This source code is licensed under BSD 3-Clause License (the "License").
  * You may not use this file except in compliance with the License.
@@ -45,28 +45,6 @@
 #include "plugins_notification.h"
 #include "replay.h"
 #include "shm_mod.h"
-
-#include "../modules/ietf_datastores_yang.h"
-#include "../modules/ietf_factory_default_yang.h"
-#include "../modules/ietf_netconf_acm_yang.h"
-#include "../modules/sysrepo_factory_default_yang.h"
-#include "../modules/sysrepo_yang.h"
-
-#if SR_YANGLIB_REVISION == 2019 - 01 - 04
-# include "../modules/ietf_yang_library@2019_01_04_yang.h"
-#elif SR_YANGLIB_REVISION == 2016 - 06 - 21
-# include "../modules/ietf_yang_library@2016_06_21_yang.h"
-#else
-# error "Unknown yang-library revision!"
-#endif
-
-#include "../modules/ietf_netconf_notifications_yang.h"
-#include "../modules/ietf_netconf_with_defaults_yang.h"
-#include "../modules/ietf_netconf_yang.h"
-#include "../modules/ietf_origin_yang.h"
-#include "../modules/sysrepo_monitoring_yang.h"
-#include "../modules/sysrepo_notifications_yang.h"
-#include "../modules/sysrepo_plugind_yang.h"
 
 /**
  * @brief Add module into sysrepo module data.
@@ -145,7 +123,7 @@ sr_lydmods_add_module_with_imps_r(struct lyd_node *sr_mods, const struct lys_mod
     void *mem;
     char *xpath = NULL;
     int found = 0;
-    LY_ARRAY_COUNT_TYPE i, j;
+    LYA_COUNT_T i, j;
 
     if (ly_mod->implemented) {
         if (*new_mod_count) {
@@ -191,16 +169,16 @@ sr_lydmods_add_module_with_imps_r(struct lyd_node *sr_mods, const struct lys_mod
     }
 
     /* all newly implemented modules will be added also from imports and includes, recursively */
-    LY_ARRAY_FOR(ly_mod->parsed->imports, i) {
+    LYA_FOR(ly_mod->parsed->imports, i) {
         if ((err_info = sr_lydmods_add_module_with_imps_r(sr_mods, ly_mod->parsed->imports[i].module, module_ds, owner,
                 group, perm, new_mods, new_mod_count))) {
             goto cleanup;
         }
     }
 
-    LY_ARRAY_FOR(ly_mod->parsed->includes, i) {
+    LYA_FOR(ly_mod->parsed->includes, i) {
         lysp_submod = ly_mod->parsed->includes[i].submodule;
-        LY_ARRAY_FOR(lysp_submod->imports, j) {
+        LYA_FOR(lysp_submod->imports, j) {
             if ((err_info = sr_lydmods_add_module_with_imps_r(sr_mods, lysp_submod->imports[j].module, module_ds, owner,
                     group, perm, new_mods, new_mod_count))) {
                 goto cleanup;
@@ -234,7 +212,7 @@ sr_lydmods_add_module_with_imps(struct lyd_node *sr_mods, const struct lys_modul
 {
     sr_error_info_t *err_info = NULL;
     const struct lysp_submodule *lysp_submod;
-    LY_ARRAY_COUNT_TYPE i, j;
+    LYA_COUNT_T i, j;
 
     assert(ly_mod->implemented);
 
@@ -244,16 +222,16 @@ sr_lydmods_add_module_with_imps(struct lyd_node *sr_mods, const struct lys_modul
     }
 
     /* all newly implemented modules will be added also from imports and includes, recursively */
-    LY_ARRAY_FOR(ly_mod->parsed->imports, i) {
+    LYA_FOR(ly_mod->parsed->imports, i) {
         if ((err_info = sr_lydmods_add_module_with_imps_r(sr_mods, ly_mod->parsed->imports[i].module, module_ds, owner,
                 group, perm, new_mods, new_mod_count))) {
             goto cleanup;
         }
     }
 
-    LY_ARRAY_FOR(ly_mod->parsed->includes, i) {
+    LYA_FOR(ly_mod->parsed->includes, i) {
         lysp_submod = ly_mod->parsed->includes[i].submodule;
-        LY_ARRAY_FOR(lysp_submod->imports, j) {
+        LYA_FOR(lysp_submod->imports, j) {
             if ((err_info = sr_lydmods_add_module_with_imps_r(sr_mods, lysp_submod->imports[j].module, module_ds, owner,
                     group, perm, new_mods, new_mod_count))) {
                 goto cleanup;
@@ -384,16 +362,18 @@ cleanup:
  * @param[in] target_mod Leafref target module.
  * @param[in] exp Leafref parsed path.
  * @param[in] prefixes Resolved prefixes in @p exp.
+ * @param[in] ctx_node Context node of @p exp.
  * @param[in,out] sr_deps Internal sysrepo data dependencies to add to.
  * @return err_info, NULL on success.
  */
 static sr_error_info_t *
 sr_lydmods_moddep_add_lref(const char *target_mod, const struct lyxp_expr *exp, struct lysc_prefix *prefixes,
-        struct lyd_node *sr_deps)
+        const struct lysc_node *ctx_node, struct lyd_node *sr_deps)
 {
     sr_error_info_t *err_info = NULL;
     struct lyd_node *sr_lref;
-    char *path = NULL;
+    char *path = NULL, *ctx_node_str = NULL;
+    uint32_t len1, len2;
 
     /* create new dependency */
     if ((err_info = sr_lyd_new_list(sr_deps, "lref", NULL, &sr_lref))) {
@@ -406,6 +386,28 @@ sr_lydmods_moddep_add_lref(const char *target_mod, const struct lyxp_expr *exp, 
         goto cleanup;
     }
 
+    /* check if relative path */
+    if (path[0] != '/') {
+        /* evaluate all ".." */
+        while (!strncmp(path, "../", 3)) {
+            ctx_node = lysc_data_parent(ctx_node);
+            len2 = strlen(path);
+            memmove(path, path + 3, len2 - 3);
+            path[len2 - 3] = '\0';
+        }
+
+        /* prepend the context node */
+        ctx_node_str = ctx_node ? lysc_path(ctx_node, LYSC_PATH_DATA, NULL, 0) : strdup("/");
+        SR_CHECK_MEM_GOTO(!ctx_node_str, err_info, cleanup);
+        len1 = strlen(ctx_node_str);
+        len2 = strlen(path);
+        path = sr_realloc(path, len1 + 1 + len2 + 1);
+        memmove(path + len1 + 1, path, len2);
+        path[len1 + 1 + len2] = '\0';
+        memcpy(path, ctx_node_str, len1);
+        path[len1] = '/';
+    }
+
     if ((err_info = sr_lyd_new_term(sr_lref, NULL, "target-path", path))) {
         goto cleanup;
     }
@@ -415,6 +417,7 @@ sr_lydmods_moddep_add_lref(const char *target_mod, const struct lyxp_expr *exp, 
 
 cleanup:
     free(path);
+    free(ctx_node_str);
     return err_info;
 }
 
@@ -557,7 +560,7 @@ sr_lydmods_moddep_type(const struct lysc_type *type, const struct lysc_node *nod
     const struct lysc_type_leafref *lref;
     struct ly_set *atoms = NULL;
     char *default_val = NULL;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
     uint32_t i;
     int valid;
 
@@ -608,7 +611,7 @@ sr_lydmods_moddep_type(const struct lysc_type *type, const struct lysc_node *nod
             }
 
             /* a foregin module is referenced */
-            if ((err_info = sr_lydmods_moddep_add_lref(ly_mod->name, lref->path, lref->prefixes, sr_deps))) {
+            if ((err_info = sr_lydmods_moddep_add_lref(ly_mod->name, lref->path, lref->prefixes, node, sr_deps))) {
                 goto cleanup;
             }
 
@@ -618,7 +621,7 @@ sr_lydmods_moddep_type(const struct lysc_type *type, const struct lysc_node *nod
         break;
     case LY_TYPE_UNION:
         uni = (struct lysc_type_union *)type;
-        LY_ARRAY_FOR(uni->types, u) {
+        LYA_FOR(uni->types, u) {
             if ((err_info = sr_lydmods_moddep_type(uni->types[u], node, op_node, sr_deps))) {
                 goto cleanup;
             }
@@ -667,7 +670,7 @@ sr_lydmods_add_all_deps_dfs_cb(struct lysc_node *node, void *data, ly_bool *dfs_
     struct lysc_when **when = NULL;
     struct lysc_must *musts = NULL;
     const struct lysc_node *op_node;
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
     int atom_opts;
     struct sr_lydmods_deps_dfs_arg *arg = data;
     char *sm_ext_path = NULL;
@@ -710,7 +713,7 @@ sr_lydmods_add_all_deps_dfs_cb(struct lysc_node *node, void *data, ly_bool *dfs_
             goto cleanup;
         }
     }
-    LY_ARRAY_FOR(when, u) {
+    LYA_FOR(when, u) {
         if ((err_info = sr_lys_find_expr_atoms(when[u]->context, node->module, when[u]->cond, when[u]->prefixes,
                 atom_opts, &atoms))) {
             goto cleanup;
@@ -721,7 +724,7 @@ sr_lydmods_add_all_deps_dfs_cb(struct lysc_node *node, void *data, ly_bool *dfs_
             goto cleanup;
         }
     }
-    LY_ARRAY_FOR(musts, u) {
+    LYA_FOR(musts, u) {
         if ((err_info = sr_lys_find_expr_atoms(node, node->module, musts[u].cond, musts[u].prefixes, atom_opts, &atoms))) {
             goto cleanup;
         }
@@ -731,7 +734,7 @@ sr_lydmods_add_all_deps_dfs_cb(struct lysc_node *node, void *data, ly_bool *dfs_
             goto cleanup;
         }
     }
-    LY_ARRAY_FOR(node->exts, u) {
+    LYA_FOR(node->exts, u) {
         if (!strcmp(node->exts[u].def->module->name, "ietf-yang-schema-mount") &&
                 !strcmp(node->exts[u].def->name, "mount-point")) {
             /* add the schema mount point to sysrepo internal data */
@@ -991,15 +994,15 @@ static sr_error_info_t *
 sr_lydmods_create(sr_conn_ctx_t *conn, struct ly_ctx *ly_ctx, struct lyd_node **sr_mods_p)
 {
     sr_error_info_t *err_info = NULL;
-    struct lys_module *ly_mod;
+    const struct lys_module *ly_mod;
     struct lyd_node *sr_mods = NULL, *init_data = NULL;
     sr_int_install_mod_t *new_mods = NULL;
     uint32_t i, new_mod_count = 0;
     struct sr_lycc_ds_data_s data_info = {0};
     const char *mod_origin;
 
-#define SR_INSTALL_INT_MOD(ctx, yang_mod, dep, new_mods, new_mod_count) \
-    if ((err_info = sr_lys_parse(ctx, yang_mod, NULL, LYS_IN_YANG, NULL, &ly_mod))) { \
+#define SR_INSTALL_INT_MOD(ctx, mod_name, revision, dep, new_mods, new_mod_count) \
+    if ((err_info = sr_ly_ctx_load_module(ctx, mod_name, revision, NULL, &ly_mod))) { \
         goto cleanup; \
     } \
     if ((err_info = sr_lydmods_add_module_with_imps_r(sr_mods, ly_mod, sr_lydmods_int_mod_ds(ly_mod->name), NULL, \
@@ -1024,8 +1027,16 @@ sr_lydmods_create(sr_conn_ctx_t *conn, struct ly_ctx *ly_ctx, struct lyd_node **
     /* for internal libyang and sysrepo modules create files and store in the persistent module data tree */
     i = 0;
     while ((ly_mod = ly_ctx_get_module_iter(ly_ctx, &i))) {
-        /* no "sysrepo" and module must be implemented */
-        if (!ly_mod->implemented || !strcmp(ly_mod->name, "sysrepo")) {
+        if (!strcmp(ly_mod->name, "sysrepo")) {
+            /* no "sysrepo" module */
+            continue;
+        }
+
+        if (!ly_mod->implemented) {
+            /* only print the YANG module */
+            if ((err_info = sr_store_module_yang_r(ly_mod))) {
+                goto cleanup;
+            }
             continue;
         }
 
@@ -1039,26 +1050,26 @@ sr_lydmods_create(sr_conn_ctx_t *conn, struct ly_ctx *ly_ctx, struct lyd_node **
     }
 
     /* install ietf-yang-library */
-    SR_INSTALL_INT_MOD(ly_ctx, ietf_yang_library_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "ietf-yang-library", SR_YANGLIB_REVISION, 0, new_mods, new_mod_count);
 
     /* install sysrepo-monitoring */
-    SR_INSTALL_INT_MOD(ly_ctx, sysrepo_monitoring_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "sysrepo-monitoring", "2023-08-11", 0, new_mods, new_mod_count);
 
     /* install sysrepo-plugind */
-    SR_INSTALL_INT_MOD(ly_ctx, sysrepo_plugind_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "sysrepo-plugind", "2022-08-26", 0, new_mods, new_mod_count);
 
     /* install sysrepo-notifications */
-    SR_INSTALL_INT_MOD(ly_ctx, sysrepo_notifications_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "sysrepo-notifications", "2025-01-10", 0, new_mods, new_mod_count);
 
     /* install ietf-netconf (implemented dependency) and ietf-netconf-with-defaults */
-    SR_INSTALL_INT_MOD(ly_ctx, ietf_netconf_yang, 1, new_mods, new_mod_count);
-    SR_INSTALL_INT_MOD(ly_ctx, ietf_netconf_with_defaults_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "ietf-netconf", "2013-09-29", 1, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "ietf-netconf-with-defaults", "2011-06-01", 0, new_mods, new_mod_count);
 
     /* install ietf-netconf-notifications */
-    SR_INSTALL_INT_MOD(ly_ctx, ietf_netconf_notifications_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "ietf-netconf-notifications", "2012-02-06", 0, new_mods, new_mod_count);
 
     /* install ietf-origin */
-    SR_INSTALL_INT_MOD(ly_ctx, ietf_origin_yang, 0, new_mods, new_mod_count);
+    SR_INSTALL_INT_MOD(ly_ctx, "ietf-origin", "2018-02-14", 0, new_mods, new_mod_count);
 
     /* compile all */
     if ((err_info = sr_ly_ctx_compile(ly_ctx))) {
@@ -1537,7 +1548,7 @@ sr_lydmods_update_replay_support_module(const struct lys_module *ly_mod, struct 
         }
 
         /* use earliest stored notification timestamp or use current time */
-        if ((err_info = ntf_handle->plugin->earliest_get_cb(ly_mod, &ts))) {
+        if ((err_info = ntf_handle->plugin->earliest_get_cb(ly_mod, NULL, &ts))) {
             return err_info;
         }
         if (SR_TS_IS_ZERO(ts)) {

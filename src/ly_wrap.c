@@ -219,11 +219,11 @@ sr_error_info_t *
 sr_ly_ctx_new(struct ly_ctx **ly_ctx)
 {
     sr_error_info_t *err_info = NULL;
-    char *yang_dir;
+    char *yang_dir = NULL;
     const char *factory_default_features[] = {"factory-default-datastore", NULL};
     uint16_t ctx_opts;
     struct ly_in *in = NULL;
-    LY_ERR lyrc;
+    LY_ERR r;
 
     /* context options */
     ctx_opts = LY_CTX_NO_YANGLIBRARY | LY_CTX_DISABLE_SEARCHDIR_CWD | LY_CTX_REF_IMPLEMENTED |
@@ -240,47 +240,55 @@ sr_ly_ctx_new(struct ly_ctx **ly_ctx)
 
     sr_ly_log_setup();
 
-    /* create new context */
-    if ((err_info = sr_path_yang_dir(&yang_dir))) {
-        goto cleanup;
-    }
-    lyrc = ly_ctx_new(yang_dir, ctx_opts, ly_ctx);
-    free(yang_dir);
-    if (lyrc) {
+    /* create a new context */
+    if (ly_ctx_new(ly_yang_module_dir(), ctx_opts, ly_ctx)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         sr_errinfo_new(&err_info, SR_ERR_INTERNAL, "Failed to create a new libyang context.");
         goto cleanup;
     }
 
-    /* load just the internal datastores modules and the "sysrepo" module */
-    if (lys_parse_mem(*ly_ctx, ietf_datastores_yang, LYS_IN_YANG, NULL)) {
-        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
-        goto cleanup;
-    }
-    if (lys_parse_mem(*ly_ctx, sysrepo_yang, LYS_IN_YANG, NULL)) {
-        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
-        goto cleanup;
-    }
-    if (lys_parse_mem(*ly_ctx, ietf_netconf_acm_yang, LYS_IN_YANG, NULL)) {
+    /* set search path for the internal YANG modules */
+    r = ly_ctx_set_searchdir(*ly_ctx, sr_yang_module_dir());
+    if (r && (r != LY_EEXIST)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }
 
-    if (ly_in_new_memory(ietf_factory_default_yang, &in)) {
+    /* load just the internal datastores modules and the "sysrepo" module */
+    if (!ly_ctx_load_module(*ly_ctx, "ietf-datastores", "2018-02-14", NULL)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }
-    if (lys_parse(*ly_ctx, in, LYS_IN_YANG, factory_default_features, NULL)) {
+    if (!ly_ctx_load_module(*ly_ctx, "sysrepo", "2025-04-04", NULL)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }
-    if (lys_parse_mem(*ly_ctx, sysrepo_factory_default_yang, LYS_IN_YANG, NULL)) {
+    if (!ly_ctx_load_module(*ly_ctx, "ietf-netconf-acm", "2018-02-14", NULL)) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
+        goto cleanup;
+    }
+
+    if (!ly_ctx_load_module(*ly_ctx, "ietf-factory-default", "2020-08-31", factory_default_features)) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
+        goto cleanup;
+    }
+    if (!ly_ctx_load_module(*ly_ctx, "sysrepo-factory-default", "2025-03-18", NULL)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }
 
     /* compile the final context */
     if ((err_info = sr_ly_ctx_compile(*ly_ctx))) {
+        goto cleanup;
+    }
+
+    /* set the repo search path yang dir */
+    if ((err_info = sr_path_yang_dir(&yang_dir))) {
+        goto cleanup;
+    }
+    r = ly_ctx_set_searchdir(*ly_ctx, yang_dir);
+    if (r && (r != LY_EEXIST)) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }
 
@@ -293,8 +301,19 @@ cleanup:
         *ly_ctx = NULL;
     }
     sr_ly_log_revert();
+    free(yang_dir);
     ly_in_free(in, 0);
     return err_info;
+}
+
+void
+sr_ly_ctx_destroy(struct ly_ctx *ly_ctx)
+{
+    sr_ly_log_setup();
+
+    ly_ctx_destroy(ly_ctx);
+
+    sr_ly_log_revert();
 }
 
 sr_error_info_t *
@@ -1129,6 +1148,23 @@ cleanup:
 }
 
 sr_error_info_t *
+sr_lyd_eval_xpath(const struct lyd_node *tree, const char *xpath, ly_bool *result)
+{
+    sr_error_info_t *err_info = NULL;
+
+    sr_ly_log_setup();
+
+    if (lyd_eval_xpath(tree, xpath, result)) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
+        goto cleanup;
+    }
+
+cleanup:
+    sr_ly_log_revert();
+    return err_info;
+}
+
+sr_error_info_t *
 sr_lyd_find_path(const struct lyd_node *tree, const char *path, int with_incomplete, struct lyd_node **match)
 {
     sr_error_info_t *err_info = NULL;
@@ -1301,6 +1337,82 @@ cleanup:
 }
 
 sr_error_info_t *
+sr_lyd_replace_term(struct lyd_node *trg, const struct lyd_node *src)
+{
+    sr_error_info_t *err_info = NULL;
+    struct lyd_node_term *t;
+    const struct lyd_node_term *s;
+    struct lyd_node *parent;
+    const struct lyd_node *child;
+    struct lyplg_type *plg;
+
+    assert((trg->schema == src->schema) && (trg->schema->nodetype & LYD_NODE_TERM));
+
+    t = (struct lyd_node_term *)trg;
+    s = (const struct lyd_node_term *)src;
+
+    /* get the plugin */
+    plg = lysc_get_type_plugin(t->value.realtype->plugin_ref);
+
+    /* free the current value */
+    plg->free(LYD_CTX(trg), &t->value);
+
+    sr_ly_log_setup();
+
+    /* duplicate the source value */
+    if (plg->duplicate(LYD_CTX(trg), &s->value, &t->value)) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
+        goto cleanup;
+    }
+
+    if (trg->flags & LYD_DEFAULT) {
+        /* remove the default flag ... */
+        trg->flags &= ~LYD_DEFAULT;
+
+        /* ... from parents, too */
+        parent = trg->parent;
+        while (parent && (parent->flags & LYD_DEFAULT)) {
+            parent->flags &= ~LYD_DEFAULT;
+            parent = parent->parent;
+        }
+    }
+
+    if (src->flags & LYD_DEFAULT) {
+        /* set the default flag ... */
+        trg->flags |= LYD_DEFAULT;
+
+        /* ... for parents, too */
+        parent = trg->parent;
+        while (parent) {
+            if (!parent->schema || (parent->flags & LYD_DEFAULT) || !lysc_is_np_cont(parent->schema)) {
+                /* not a non-dflt NP container */
+                break;
+            }
+
+            LY_LIST_FOR(lyd_child(parent), child) {
+                if (!(child->flags & LYD_DEFAULT)) {
+                    break;
+                }
+            }
+            if (child) {
+                /* explicit child, no dflt change */
+                break;
+            }
+
+            parent->flags |= LYD_DEFAULT;
+            parent = parent->parent;
+        }
+    }
+
+    /* set the new flag */
+    trg->flags |= LYD_NEW;
+
+cleanup:
+    sr_ly_log_revert();
+    return err_info;
+}
+
+sr_error_info_t *
 sr_lyd_any_value_str(const struct lyd_node *node, char **str)
 {
     sr_error_info_t *err_info = NULL;
@@ -1353,6 +1465,23 @@ sr_lyd_diff_siblings(const struct lyd_node *target, const struct lyd_node *sourc
         sr_ly_log_clear();
         *snode_not_found = 1;
     } else if (lyrc) {
+        sr_errinfo_new_ly(&err_info, SR_ERR_LY);
+        goto cleanup;
+    }
+
+cleanup:
+    sr_ly_log_revert();
+    return err_info;
+}
+
+sr_error_info_t *
+sr_lyd_diff_apply_all(struct lyd_node **data, const struct lyd_node *diff)
+{
+    sr_error_info_t *err_info = NULL;
+
+    sr_ly_log_setup();
+
+    if (lyd_diff_apply_all(data, diff)) {
         sr_errinfo_new_ly(&err_info, SR_ERR_LY);
         goto cleanup;
     }

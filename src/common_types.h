@@ -171,6 +171,7 @@ struct sr_session_ctx_s {
     sr_sub_event_t ev;              /**< Event of a callback session. ::SR_SUB_EV_NONE for standard user sessions. */
 
     struct {
+        uint32_t orig_sid;          /**< Originator session ID. */
         char *orig_name;            /**< Set originator name by the event originator. */
         void *orig_data;            /**< Set originator data by the event originator. */
     } ev_data;                      /**< Event data from the originator. Valid only if ev is not ::SR_SUB_EV_NONE. */
@@ -314,6 +315,20 @@ struct sr_subscription_ctx_s {
         sr_shm_t sub_shm;           /**< Subscription SHM. */
     } *rpc_subs;                    /**< RPC/action subscriptions for each operation. */
     uint32_t rpc_sub_count;         /**< RPC/action operation subscription count. */
+};
+
+/**
+ * @brief Private candidate datastore context.
+ */
+struct sr_priv_cand_s {
+    struct lyd_node *diff_run;              /**< Diff of changes in the running datastore since the private candidate
+                                                 datastore was created. */
+    struct lyd_node *diff_privcand;         /**< Diff of changes made by the user in the private candidate datastore
+                                                 since its creation. */
+    ATOMIC_T commit_orig_sid;               /**< Commit ::sr_apply_changes() originator session ID. */
+    pthread_mutex_t diff_lock;              /**< Lock for accessing the diff trees and orig SID. */
+    sr_subscription_ctx_t *subscription;    /**< Subscription for tracking changes made to the running datastore. */
+    int has_ctx_lock;                       /**< Flag if private canidate is holding context lock. */
 };
 
 /**

@@ -1022,6 +1022,220 @@ test_union(void **state)
 }
 
 static void
+test_union_hints(void **state)
+{
+    struct state *st = (struct state *)*state;
+    const struct ly_ctx *ly_ctx;
+    struct lyd_node *edit;
+    sr_data_t *subtree;
+    const char *str2;
+    char *str;
+    int ret;
+
+    /* create un-leaf as a string */
+    str2 =
+            "{\n"
+            "  \"test:cont\": {\n"
+            "    \"un-leaf\": \"50\"\n"
+            "  }\n"
+            "}\n";
+    ly_ctx = sr_acquire_context(st->conn);
+    assert_int_equal(LY_SUCCESS, lyd_parse_data_mem(ly_ctx, str2, LYD_JSON, LYD_PARSE_ONLY | LYD_PARSE_STRICT, 0, &edit));
+
+    ret = sr_edit_batch(st->sess, edit, "merge");
+    lyd_free_all(edit);
+    sr_release_context(st->conn);
+    assert_int_equal(ret, SR_ERR_OK);
+    ret = sr_apply_changes(st->sess, 0);
+    assert_int_equal(ret, SR_ERR_OK);
+
+    /* check datastore contents */
+    ret = sr_get_subtree(st->sess, "/test:cont", 0, &subtree);
+    assert_int_equal(ret, SR_ERR_OK);
+    lyd_print_mem(&str, subtree->tree, LYD_JSON, LYD_PRINT_SIBLINGS);
+    sr_release_data(subtree);
+    assert_string_equal(str, str2);
+    free(str);
+
+    /* merge un-leaf again as a string but with a different value */
+    str2 =
+            "{\n"
+            "  \"test:cont\": {\n"
+            "    \"un-leaf\": \"25\"\n"
+            "  }\n"
+            "}\n";
+    ly_ctx = sr_acquire_context(st->conn);
+    assert_int_equal(LY_SUCCESS, lyd_parse_data_mem(ly_ctx, str2, LYD_JSON, LYD_PARSE_ONLY | LYD_PARSE_STRICT, 0, &edit));
+
+    ret = sr_edit_batch(st->sess, edit, "merge");
+    lyd_free_all(edit);
+    sr_release_context(st->conn);
+    assert_int_equal(ret, SR_ERR_OK);
+    ret = sr_apply_changes(st->sess, 0);
+    assert_int_equal(ret, SR_ERR_OK);
+
+    /* check datastore contents */
+    ret = sr_get_subtree(st->sess, "/test:cont", 0, &subtree);
+    assert_int_equal(ret, SR_ERR_OK);
+    lyd_print_mem(&str, subtree->tree, LYD_JSON, LYD_PRINT_SIBLINGS);
+    sr_release_data(subtree);
+    assert_string_equal(str, str2);
+    free(str);
+}
+
+static void
+test_union_hints2(void **state)
+{
+    struct state *st = (struct state *)*state;
+    const struct ly_ctx *ly_ctx;
+    struct lyd_node *edit;
+    sr_data_t *data;
+    const char *str2;
+    char *str;
+    int ret;
+
+    /* install the module with union-typed leaf-list, list keys and
+     * their user-ordered variants (leafs are covered by test_union_hints) */
+    ret = sr_install_module(st->conn, TESTS_SRC_DIR "/files/un.yang", TESTS_SRC_DIR "/files", NULL);
+    assert_int_equal(ret, SR_ERR_OK);
+
+    /* create the values, mostly as strings and a number among the keys */
+    str2 =
+            "{\n"
+            "  \"un:cont\": {\n"
+            "    \"ll\": [\n"
+            "      \"50\",\n"
+            "      \"abc\"\n"
+            "    ],\n"
+            "    \"ll2\": [\n"
+            "      \"50\",\n"
+            "      \"abc\"\n"
+            "    ],\n"
+            "    \"l\": [\n"
+            "      {\n"
+            "        \"k1\": \"50\",\n"
+            "        \"k2\": 50,\n"
+            "        \"k3\": \"50\"\n"
+            "      }\n"
+            "    ],\n"
+            "    \"l2\": [\n"
+            "      {\n"
+            "        \"k1\": \"50\",\n"
+            "        \"k2\": 50,\n"
+            "        \"k3\": \"50\"\n"
+            "      }\n"
+            "    ]\n"
+            "  }\n"
+            "}\n";
+    ly_ctx = sr_acquire_context(st->conn);
+    assert_int_equal(LY_SUCCESS, lyd_parse_data_mem(ly_ctx, str2, LYD_JSON, LYD_PARSE_ONLY | LYD_PARSE_STRICT, 0, &edit));
+
+    ret = sr_edit_batch(st->sess, edit, "merge");
+    lyd_free_all(edit);
+    sr_release_context(st->conn);
+    assert_int_equal(ret, SR_ERR_OK);
+    ret = sr_apply_changes(st->sess, 0);
+    assert_int_equal(ret, SR_ERR_OK);
+
+    /* check datastore contents, the resolved union member types must not change */
+    ret = sr_get_data(st->sess, "/un:*", 0, 0, 0, &data);
+    assert_int_equal(ret, SR_ERR_OK);
+    lyd_print_mem(&str, data->tree, LYD_JSON, LYD_PRINT_SIBLINGS);
+    sr_release_data(data);
+    assert_string_equal(str, str2);
+    free(str);
+
+    /* merge some new values again as strings */
+    str2 =
+            "{\n"
+            "  \"un:cont\": {\n"
+            "    \"ll\": [\n"
+            "      \"25\",\n"
+            "      \"30\"\n"
+            "    ],\n"
+            "    \"ll2\": [\n"
+            "      \"25\"\n"
+            "    ],\n"
+            "    \"l\": [\n"
+            "      {\n"
+            "        \"k1\": \"25\",\n"
+            "        \"k2\": \"25\",\n"
+            "        \"k3\": \"25\"\n"
+            "      }\n"
+            "    ],\n"
+            "    \"l2\": [\n"
+            "      {\n"
+            "        \"k1\": \"25\",\n"
+            "        \"k2\": \"25\",\n"
+            "        \"k3\": \"25\"\n"
+            "      }\n"
+            "    ]\n"
+            "  }\n"
+            "}\n";
+    ly_ctx = sr_acquire_context(st->conn);
+    assert_int_equal(LY_SUCCESS, lyd_parse_data_mem(ly_ctx, str2, LYD_JSON, LYD_PARSE_ONLY | LYD_PARSE_STRICT, 0, &edit));
+
+    ret = sr_edit_batch(st->sess, edit, "merge");
+    lyd_free_all(edit);
+    sr_release_context(st->conn);
+    assert_int_equal(ret, SR_ERR_OK);
+    ret = sr_apply_changes(st->sess, 0);
+    assert_int_equal(ret, SR_ERR_OK);
+
+    /* check datastore contents */
+    str2 =
+            "{\n"
+            "  \"un:cont\": {\n"
+            "    \"ll\": [\n"
+            "      \"25\",\n"
+            "      \"30\",\n"
+            "      \"50\",\n"
+            "      \"abc\"\n"
+            "    ],\n"
+            "    \"ll2\": [\n"
+            "      \"50\",\n"
+            "      \"abc\",\n"
+            "      \"25\"\n"
+            "    ],\n"
+            "    \"l\": [\n"
+            "      {\n"
+            "        \"k1\": \"25\",\n"
+            "        \"k2\": \"25\",\n"
+            "        \"k3\": \"25\"\n"
+            "      },\n"
+            "      {\n"
+            "        \"k1\": \"50\",\n"
+            "        \"k2\": 50,\n"
+            "        \"k3\": \"50\"\n"
+            "      }\n"
+            "    ],\n"
+            "    \"l2\": [\n"
+            "      {\n"
+            "        \"k1\": \"50\",\n"
+            "        \"k2\": 50,\n"
+            "        \"k3\": \"50\"\n"
+            "      },\n"
+            "      {\n"
+            "        \"k1\": \"25\",\n"
+            "        \"k2\": \"25\",\n"
+            "        \"k3\": \"25\"\n"
+            "      }\n"
+            "    ]\n"
+            "  }\n"
+            "}\n";
+    ret = sr_get_data(st->sess, "/un:*", 0, 0, 0, &data);
+    assert_int_equal(ret, SR_ERR_OK);
+    lyd_print_mem(&str, data->tree, LYD_JSON, LYD_PRINT_SIBLINGS);
+    sr_release_data(data);
+    assert_string_equal(str, str2);
+    free(str);
+
+    /* cleanup */
+    ret = sr_remove_module(st->conn, "un", 0);
+    assert_int_equal(ret, SR_ERR_OK);
+}
+
+static void
 test_decimal64(void **state)
 {
     struct state *st = (struct state *)*state;
@@ -1508,6 +1722,8 @@ main(void)
         cmocka_unit_test(test_purge),
         cmocka_unit_test(test_top_op),
         cmocka_unit_test_teardown(test_union, clear_test),
+        cmocka_unit_test_teardown(test_union_hints, clear_test),
+        cmocka_unit_test(test_union_hints2),
         cmocka_unit_test(test_decimal64),
         cmocka_unit_test(test_mutiple_types),
         cmocka_unit_test(test_edit_forbid_node_types),
@@ -1516,6 +1732,6 @@ main(void)
     };
 
     setenv("CMOCKA_TEST_ABORT", "1", 1);
-    test_log_init();
+    test_init();
     return cmocka_run_group_tests(tests, setup_f, teardown_f);
 }

@@ -4,8 +4,8 @@
  * @brief multi-module notification subscription functions
  *
  * @copyright
- * Copyright (c) 2023 - 2024 Deutsche Telekom AG.
- * Copyright (c) 2023 - 2024 CESNET, z.s.p.o.
+ * Copyright (c) 2023 - 2026 Deutsche Telekom AG.
+ * Copyright (c) 2023 - 2026 CESNET, z.s.p.o.
  *
  * This source code is licensed under BSD 3-Clause License (the "License").
  * You may not use this file except in compliance with the License.
@@ -19,9 +19,10 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <fcntl.h>
+#include <inttypes.h>
 #include <poll.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -39,38 +40,19 @@
 API int
 srsn_filter_subtree2xpath(const struct lyd_node *subtree, sr_session_ctx_t *session, char **xpath_filter)
 {
-    sr_error_info_t *err_info = NULL;
-    struct srsn_filter filter = {0};
-
-    SR_CHECK_ARG_APIRET(!subtree || !xpath_filter, session, err_info);
-
-    *xpath_filter = NULL;
-
-    /* create a filter structure first */
-    if ((err_info = srsn_filter_create_subtree(subtree, &filter))) {
-        goto cleanup;
-    }
-
-    /* transform into an XPath */
-    if ((err_info = srsn_filter_filter2xpath(&filter, xpath_filter))) {
-        goto cleanup;
-    }
-
-cleanup:
-    srsn_filter_erase(&filter);
-    return sr_api_ret(session, err_info);
+    return sr_filter_subtree2xpath(session, subtree, 0, xpath_filter);
 }
 
 static LY_ERR
 srsn_lysc_has_notif_clb(struct lysc_node *node, void *UNUSED(data), ly_bool *UNUSED(dfs_continue))
 {
-    LY_ARRAY_COUNT_TYPE u;
+    LYA_COUNT_T u;
     const struct lysc_ext *ext;
 
     if (node->nodetype == LYS_NOTIF) {
         return LY_EEXIST;
     } else {
-        LY_ARRAY_FOR(node->exts, u) {
+        LYA_FOR(node->exts, u) {
             ext = node->exts[u].def;
             if (!strcmp(ext->name, "mount-point") && !strcmp(ext->module->name, "ietf-yang-schema-mount")) {
                 /* any data including notifications could be mounted */
@@ -208,6 +190,8 @@ srsn_subscribe(sr_session_ctx_t *session, const char *stream, const char *xpath_
     struct timespec cur_ts, replay_start;
     int valid;
 
+    SR_CHECK_ARG_APIRET(!session || !fd || !sub_id, NULL, err_info);
+
     /* CONTEXT LOCK */
     if ((err_info = sr_lycc_lock(session->conn, SR_LOCK_READ, 0, __func__))) {
         return sr_api_ret(session, err_info);
@@ -304,6 +288,13 @@ srsn_yang_push_periodic(sr_session_ctx_t *session, sr_datastore_t ds, const char
     struct srsn_sub *s = NULL;
     struct lys_module *ly_mod;
 
+    SR_CHECK_ARG_APIRET(!session || !fd || !sub_id, NULL, err_info);
+
+    if (!period_ms) {
+        sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Period of 0 is invalid.");
+        goto cleanup;
+    }
+
     /* CONTEXT LOCK */
     if ((err_info = sr_lycc_lock(session->conn, SR_LOCK_READ, 0, __func__))) {
         return sr_api_ret(session, err_info);
@@ -373,6 +364,8 @@ srsn_yang_push_on_change(sr_session_ctx_t *session, sr_datastore_t ds, const cha
     const struct lys_module *ly_mod;
     struct srsn_sub *s = NULL;
     int valid;
+
+    SR_CHECK_ARG_APIRET(!session || !fd || !sub_id, NULL, err_info);
 
     /* CONTEXT LOCK */
     if ((err_info = sr_lycc_lock(session->conn, SR_LOCK_READ, 0, __func__))) {
@@ -543,6 +536,11 @@ srsn_yang_push_modify_periodic(uint32_t sub_id, uint32_t period_ms, const struct
 {
     sr_error_info_t *err_info = NULL;
     struct srsn_sub *sub;
+
+    if (!period_ms) {
+        sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Period of 0 is invalid.");
+        return sr_api_ret(NULL, err_info);
+    }
 
     /* LOCK */
     if ((err_info = srsn_lock())) {
@@ -809,7 +807,7 @@ srsn_oper_data_streams_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), co
     uint32_t idx = 0;
     char *buf;
     int enabled, rc;
-    struct timespec earliest_notif;
+    struct timespec replay_start;
 
     /* context locked while the callback is executing */
     conn = sr_session_get_connection(session);
@@ -850,7 +848,7 @@ srsn_oper_data_streams_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), co
         }
 
         /* learn whether replay is supported */
-        if (sr_get_module_replay_support(conn, ly_mod->name, &earliest_notif, &enabled)) {
+        if (sr_get_module_replay_support(conn, ly_mod->name, NULL, &enabled)) {
             SR_ERRINFO_INT(&err_info);
             goto cleanup;
         }
@@ -858,7 +856,11 @@ srsn_oper_data_streams_cb(sr_session_ctx_t *session, uint32_t UNUSED(sub_id), co
             if ((err_info = sr_lyd_new_term(stream, NULL, "replay-support", NULL))) {
                 goto cleanup;
             }
-            ly_time_ts2str(&earliest_notif, &buf);
+            if ((rc = sr_get_module_replay_start(conn, ly_mod->name, NULL, NULL, &replay_start))) {
+                SR_ERRINFO_INT(&err_info);
+                goto cleanup;
+            }
+            ly_time_ts2str(&replay_start, &buf);
             if ((err_info = sr_lyd_new_term(stream, NULL, "replay-log-creation-time", buf))) {
                 free(buf);
                 goto cleanup;
@@ -909,8 +911,11 @@ srsn_oper_data_sub(uint32_t sub_id, srsn_state_sub_t **sub)
 {
     sr_error_info_t *err_info = NULL;
     struct srsn_sub *s;
+    srsn_state_sub_t *state_sub = NULL;
 
     SR_CHECK_ARG_APIRET(!sub_id || !sub, NULL, err_info);
+
+    *sub = NULL;
 
     /* LOCK */
     if ((err_info = srsn_lock())) {
@@ -923,17 +928,21 @@ srsn_oper_data_sub(uint32_t sub_id, srsn_state_sub_t **sub)
         goto cleanup;
     }
 
-    *sub = calloc(1, sizeof **sub);
-    SR_CHECK_MEM_GOTO(!*sub, err_info, cleanup);
+    state_sub = calloc(1, sizeof *state_sub);
+    SR_CHECK_MEM_GOTO(!state_sub, err_info, cleanup);
 
-    if ((err_info = srsn_state_collect_sub(s, *sub))) {
+    if ((err_info = srsn_state_collect_sub(s, state_sub))) {
         goto cleanup;
     }
+
+    *sub = state_sub;
+    state_sub = NULL;
 
 cleanup:
     /* UNLOCK */
     srsn_unlock();
 
+    srsn_state_free(state_sub, 1);
     return sr_api_ret(NULL, err_info);
 }
 
@@ -943,63 +952,108 @@ srsn_oper_data_subscriptions_free(srsn_state_sub_t *subs, uint32_t count)
     srsn_state_free(subs, count);
 }
 
-API int
-srsn_read_notif(int fd, const struct ly_ctx *ly_ctx, struct timespec *timestamp, struct lyd_node **notif)
+/**
+ * @brief Read exactly the requested number of bytes.
+ *
+ * @param[in] fd File descriptor to read from.
+ * @param[in] size Number of bytes to read.
+ * @param[out] buf Buffer to read into.
+ * @return err_info, NULL on success.
+ */
+static sr_error_info_t *
+srsn_read(int fd, uint32_t size, void *buf)
 {
     sr_error_info_t *err_info = NULL;
-    int rc = SR_ERR_OK;
+    uint32_t rd = 0;
+    ssize_t r;
+
+    while (rd < size) {
+        r = read(fd, (char *)buf + rd, size - rd);
+        if (r == -1) {
+            if (errno == EINTR) {
+                continue;
+            }
+            sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to read a notification (%s).", strerror(errno));
+            goto cleanup;
+        } else if (!r) {
+            sr_errinfo_new(&err_info, SR_ERR_UNSUPPORTED, "Failed to read a notification (unexpected end-of-file).");
+            goto cleanup;
+        }
+
+        rd += r;
+    }
+
+cleanup:
+    return err_info;
+}
+
+API int
+srsn_read_notif_lyb(int fd, struct timespec *timestamp, char **lyb, uint32_t *lyb_size)
+{
+    sr_error_info_t *err_info = NULL;
     uint32_t size;
     char *buf = NULL;
-    ssize_t r, rr;
+    int rc;
 
-    SR_CHECK_ARG_APIRET(!ly_ctx || !timestamp || !notif, NULL, err_info);
+    SR_CHECK_ARG_APIRET(!timestamp || !lyb || !lyb_size, NULL, err_info);
 
-    /* 1) read the timestamp */
-    if ((r = read(fd, timestamp, sizeof *timestamp)) != sizeof *timestamp) {
-        if ((r == -1) && ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
-            /* timed out */
-            rc = SR_ERR_TIME_OUT;
-        } else if (!r) {
-            /* end-of-file */
-            rc = SR_ERR_UNSUPPORTED;
-        } else {
-            /* error */
-            sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to read notification timestamp (%s).", strerror(errno));
-        }
+    *lyb = NULL;
+    *lyb_size = 0;
+
+    /* check for a notification without waiting */
+    rc = srsn_poll(fd, 0);
+    if ((rc == SR_ERR_TIME_OUT) || (rc == SR_ERR_UNSUPPORTED)) {
+        return rc;
+    } else if (rc) {
+        sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to poll for a notification.");
+        goto cleanup;
+    }
+
+    /* 1) read the timestamp, the writer writes a notification whole so the rest follows */
+    if ((err_info = srsn_read(fd, sizeof *timestamp, timestamp))) {
         goto cleanup;
     }
 
     /* 2) read the notification size */
-    if (read(fd, &size, sizeof size) != sizeof size) {
-        sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to read notification size (%s).", strerror(errno));
+    if ((err_info = srsn_read(fd, sizeof size, &size))) {
         goto cleanup;
     }
-    assert(size < UINT32_MAX);
+    if (size > SRSN_MAX_FRAME_SIZE) {
+        sr_errinfo_new(&err_info, SR_ERR_SYS, "Invalid notification size (%" PRIu32 " B).", size);
+        goto cleanup;
+    }
 
-    buf = malloc(size + 1);
+    buf = malloc(size);
     SR_CHECK_MEM_GOTO(!buf, err_info, cleanup);
 
-    /* 3) read the notification LYB, handle large notifications */
-    rr = 0;
-    do {
-        r = read(fd, buf + rr, size - rr);
-        if ((r == -1) && ((errno == EAGAIN) || (errno == EWOULDBLOCK))) {
-            /* busy */
-            usleep(100);
-            continue;
-        } else if (r == -1) {
-            /* error */
-            sr_errinfo_new(&err_info, SR_ERR_SYS, "Failed to read a notification (%s).", strerror(errno));
-            goto cleanup;
-        } else if (!r) {
-            /* end-of-file */
-            r = SR_ERR_UNSUPPORTED;
-            goto cleanup;
-        }
+    /* 3) read the notification LYB */
+    if ((err_info = srsn_read(fd, size, buf))) {
+        goto cleanup;
+    }
 
-        rr += r;
-    } while ((uint32_t)rr < size);
-    buf[size] = '\0';
+    *lyb = buf;
+    *lyb_size = size;
+    buf = NULL;
+
+cleanup:
+    free(buf);
+    return sr_api_ret(NULL, err_info);
+}
+
+API int
+srsn_read_notif(int fd, const struct ly_ctx *ly_ctx, struct timespec *timestamp, struct lyd_node **notif)
+{
+    sr_error_info_t *err_info = NULL;
+    uint32_t size;
+    char *buf = NULL;
+    int rc = SR_ERR_OK;
+
+    SR_CHECK_ARG_APIRET(!ly_ctx || !timestamp || !notif, NULL, err_info);
+
+    /* read the notification */
+    if ((rc = srsn_read_notif_lyb(fd, timestamp, &buf, &size))) {
+        goto cleanup;
+    }
 
     /* parse the notification */
     if ((err_info = sr_lyd_parse_op(ly_ctx, buf, LYD_LYB, LYD_TYPE_NOTIF_YANG, notif))) {
@@ -1075,6 +1129,19 @@ srsn_read_dispatch_add(int fd, void *cb_data)
 
     /* add into the pollfd structure */
     err_info = srsn_dispatch_add(fd, cb_data);
+
+    return sr_api_ret(NULL, err_info);
+}
+
+API int
+srsn_read_dispatch_del(int fd)
+{
+    sr_error_info_t *err_info = NULL;
+
+    SR_CHECK_ARG_APIRET(fd < 0, NULL, err_info);
+
+    /* remove from the pollfd structure */
+    err_info = srsn_dispatch_del(fd);
 
     return sr_api_ret(NULL, err_info);
 }

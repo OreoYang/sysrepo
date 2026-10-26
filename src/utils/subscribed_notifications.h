@@ -74,12 +74,7 @@ typedef struct {
 } srsn_state_sub_t;
 
 /**
- * @brief Transform a subtree filter into an XPath filter.
- *
- * @param[in] subtree Subtree of the filter itself.
- * @param[in] session Optional session for storing errors.
- * @param[out] xpath_filter Generated XPath filter.
- * @return Error code (::SR_ERR_OK on success).
+ * @brief Deprecated, use ::sr_filter_subtree2xpath().
  */
 int srsn_filter_subtree2xpath(const struct lyd_node *subtree, sr_session_ctx_t *session, char **xpath_filter);
 
@@ -287,16 +282,34 @@ void srsn_oper_data_subscriptions_free(srsn_state_sub_t *subs, uint32_t count);
 /**
  * @brief Read a notification.
  *
- * @param[in] fd Opened file descriptor to read from, may be non-blocking.
+ * Never waits for a notification to arrive, call ::srsn_poll() first for that.
+ *
+ * @param[in] fd Pipe end opened by a subscription.
  * @param[in] ly_ctx Libyang context to use for parsing the notification.
  * @param[out] timestamp Notification timestamp.
  * @param[out] notif Parsed notification.
  * @return ::SR_ERR_OK on success,
- * @return ::SR_ERR_TIME_OUT if reading would block,
+ * @return ::SR_ERR_TIME_OUT if no notification is available,
  * @return ::SR_ERR_UNSUPPORTED on end-of-file (subscription terminated, the write end was closed),
- * @return ::SR_ERR_SYS on another error (logged).
+ * @return another error code on failure (logged).
  */
 int srsn_read_notif(int fd, const struct ly_ctx *ly_ctx, struct timespec *timestamp, struct lyd_node **notif);
+
+/**
+ * @brief Read a notification without parsing it.
+ *
+ * Never waits for a notification to arrive, call ::srsn_poll() first for that.
+ *
+ * @param[in] fd Pipe end opened by a subscription.
+ * @param[out] timestamp Notification timestamp.
+ * @param[out] lyb Notification in LYB format, free by the caller.
+ * @param[out] lyb_size Size of @p lyb.
+ * @return ::SR_ERR_OK on success,
+ * @return ::SR_ERR_TIME_OUT if no notification is available,
+ * @return ::SR_ERR_UNSUPPORTED on end-of-file (subscription terminated, the write end was closed),
+ * @return another error code on failure (logged).
+ */
+int srsn_read_notif_lyb(int fd, struct timespec *timestamp, char **lyb, uint32_t *lyb_size);
 
 /**
  * @brief Poll a file descriptor for data to read.
@@ -322,6 +335,13 @@ typedef void (*srsn_notif_cb)(const struct lyd_node *notif, const struct timespe
 /**
  * @brief Init read dispatch for notifications, overwrites any previous parameters.
  *
+ * The dispatch runs @p cb on a separate thread, so the callback and the FD it reads from are shared
+ * between that thread and the caller. To avoid data races, never close a dispatched FD directly and do
+ * not free its callback data while the FD is registered: use ::srsn_read_dispatch_del() to remove an FD,
+ * which closes it and blocks until the callback is no longer running for it, only then is it safe to free
+ * the callback data. The callback data must also stay valid and at a stable address for the whole time the
+ * FD is dispatched. Only ::srsn_read_dispatch_destroy() stops the thread.
+ *
  * @param[in] conn Connection that must not be terminated while the notifications are being processed.
  * @param[in] cb Callback to be called for each notification.
  * @return Error code (::SR_ERR_OK on success).
@@ -336,8 +356,11 @@ int srsn_read_dispatch_start(int fd, sr_conn_ctx_t *conn, srsn_notif_cb cb, void
 /**
  * @brief Add another subscription to be handled by the dispatched thread.
  *
- * The thread is automatically started on the first @p fd and terminated when the last
- * one is closed.
+ * The thread is automatically started on the first @p fd and runs until ::srsn_read_dispatch_destroy().
+ *
+ * On success @p fd is owned by the dispatch, which closes it once the subscription terminates or when
+ * removed by ::srsn_read_dispatch_del(), so it must never be closed by the caller. On error @p fd is
+ * not registered and stays owned by the caller.
  *
  * @param[in] fd Subscription file descriptor to read from.
  * @param[in] cb_data User @p cb callback data for the @p fd.
@@ -346,9 +369,27 @@ int srsn_read_dispatch_start(int fd, sr_conn_ctx_t *conn, srsn_notif_cb cb, void
 int srsn_read_dispatch_add(int fd, void *cb_data);
 
 /**
+ * @brief Remove a subscription from being handled by the dispatched thread and close its FD.
+ *
+ * Blocks until the dispatched thread is not processing any notification, so once this function returns,
+ * the callback is neither running for @p fd nor can be called for it again and the callback data of
+ * @p fd can be freed.
+ *
+ * It is not an error to remove an FD that is no longer handled by the dispatched thread, which closes
+ * FDs of terminated subscriptions on its own without notifying the caller. So, calling this function
+ * is always the correct way of learning that the callback data of @p fd can be freed.
+ *
+ * @param[in] fd Subscription file descriptor previously added by ::srsn_read_dispatch_add(), closed
+ * unless the dispatched thread has already closed it after the subscription terminated, in which case
+ * its number must not have been reused for another dispatch FD, which would be removed instead.
+ * @return Error code (::SR_ERR_OK on success).
+ */
+int srsn_read_dispatch_del(int fd);
+
+/**
  * @brief Get the number of subscriptions currently handled by the dispatched thread.
  *
- * @return Number of handled subscriptions, 0 means the dispatch thread is not running.
+ * @return Number of handled subscriptions, may be 0 while the dispatch thread is still running.
  */
 uint32_t srsn_read_dispatch_count(void);
 

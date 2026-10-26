@@ -1721,8 +1721,8 @@ sr_edit_apply_replace(struct lyd_node *data_match, int val_equal, const struct l
                 return err_info;
             }
 
-            /* modify the node */
-            if ((err_info = sr_lyd_change_term(data_match, lyd_get_value(edit_node), 1))) {
+            /* replace the value of the node */
+            if ((err_info = sr_lyd_replace_term(data_match, edit_node))) {
                 return err_info;
             }
 
@@ -2731,7 +2731,7 @@ sr_edit_add_merge_op(struct lyd_node *match, struct lyd_node **root, const char 
 {
     sr_error_info_t *err_info = NULL;
     const struct lysc_node *schema;
-    struct lyd_node *parent = NULL, *sibling = NULL;
+    struct lyd_node *parent = NULL, *sibling;
     enum edit_op cur_op;
     int own_oper;
 
@@ -2793,7 +2793,11 @@ sr_edit_add_merge_op(struct lyd_node *match, struct lyd_node **root, const char 
                 } else {
                     /* need to create a valid node instead */
                     parent = lyd_parent(match);
-                    sibling = match->prev;
+                    if (match->prev != match) {
+                        sibling = match->prev;
+                    } else {
+                        sibling = NULL;
+                    }
 
                     if (*root == match) {
                         *root = (*root)->next;
@@ -3013,13 +3017,13 @@ sr_edit_add_find_match(const struct ly_ctx *ly_ctx, const struct lyd_node *tree,
         struct lyd_node **match)
 {
     sr_error_info_t *err_info = NULL;
-    const char *mod_name, *name, *xp, *pred, *pred_end;
+    const char *mod_name, *name, *xp, *pred, *pred_end, *val;
     char *mname, *dpred = NULL;
     const struct lyd_node *siblings;
     struct lyd_node *iter;
     const struct lysc_node *schema, *siter;
     const struct lys_module *mod;
-    uint32_t cur_pos, pos;
+    uint32_t cur_pos, pos, val_len;
     int mlen, len;
 
     /* validate xpath */
@@ -3102,8 +3106,16 @@ sr_edit_add_find_match(const struct ly_ctx *ly_ctx, const struct lyd_node *tree,
             case LYS_LEAFLIST:
                 /* find the (specific) leaf-list instance */
                 if (pred != pred_end) {
-                    assert(!strncmp(pred, "[.=", 3) && ((pred[3] == '\'') || (pred[3] == '\"')));
-                    dpred = strndup(pred + 4, (pred_end - 2) - (pred + 4));
+                    assert(pred[0] == '[');
+                    for (++pred; isspace(pred[0]); ++pred) {}
+                    assert(pred[0] == '.');
+                    for (++pred; isspace(pred[0]); ++pred) {}
+                    assert(pred[0] == '=');
+                    for (++pred; isspace(pred[0]); ++pred) {}
+
+                    /* parse the value */
+                    sr_path_get_val(pred, NULL, &val, &val_len);
+                    dpred = strndup(val, val_len);
                 } else if (!xp[0] && value) {
                     dpred = strdup(value);
                 }
@@ -3340,8 +3352,9 @@ sr_diff_set_getnext(struct ly_set *set, uint32_t *idx, struct lyd_node **node, s
             return err_info;
         }
 
-        if ((parent != *node) && lysc_is_userordered(parent->schema) && (lyd_get_meta_value(meta)[0] == 'r')) {
-            /* do not return changes for descendants of moved userord lists without operation */
+        if ((parent != *node) && (lyd_get_meta_value(meta)[0] == 'r') && (lysc_is_userordered(parent->schema) ||
+                (parent->schema->nodetype & LYD_NODE_ANY))) {
+            /* do not return changes for descendants of moved userord lists or anyxml/anydata nodes without operation */
             ++(*idx);
             continue;
         }
