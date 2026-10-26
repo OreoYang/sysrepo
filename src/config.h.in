@@ -220,4 +220,7 @@
 /** notification file will never exceed this size (kB) */
 #define SRPJSON_NOTIF_FILE_MAX_SIZE @JSON_NOTIF_FILE_MAX_SIZE@
 
+/** incremental YANG validation compiled in and used (cmake -DENABLE_VALIDATE_INCREMENTAL=OFF removes it) */
+#cmakedefine ENABLE_VALIDATE_INCREMENTAL
+
 #endif /* _CONFIG_H */

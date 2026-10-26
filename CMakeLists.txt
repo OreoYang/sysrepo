@@ -87,6 +87,7 @@ else()
     option(ENABLE_TESTS "Build tests" OFF)
     option(ENABLE_VALGRIND_TESTS "Build tests with valgrind" OFF)
 endif()
+option(ENABLE_VALIDATE_INCREMENTAL "Use incremental YANG validation (falls back to full validation when it cannot prove a change safe)" ON)
 option(ENABLE_EXAMPLES "Build examples." ON)
 set(PRINTED_CONTEXT_ADDRESS "" CACHE STRING "Address of the printed context, generated automatically by default.
 If set, it must be page-aligned and in a memory region unlikely to conflict with normal process allocation. Set to 0 to disable printed context.")

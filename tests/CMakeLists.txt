@@ -67,8 +67,9 @@ if(ENABLE_TESTS)
     endif()
 
     # lists of all the tests
-    set(tests test_modules test_context_change test_validation test_edit test_candidate test_oper_pull test_oper_push
-        test_lock test_apply_changes test_copy_config test_rpc_action test_notif test_get test_privcand test_process
+    set(tests test_modules test_context_change test_validation test_validation_incr test_edit test_candidate
+        test_oper_pull test_oper_push test_lock test_apply_changes test_copy_config test_rpc_action test_notif test_get
+        test_privcand test_process
         test_multi_connection test_nacm test_rotation test_sub_notif test_plugin test_rwlock)
 
     # sysrepo-notifd tests, sharing the harness in notifd/

@@ -1,0 +1,17 @@
+module incr-a {
+    namespace urn:tests:incr-a;
+    prefix a;
+    yang-version 1.1;
+
+    identity base-t;
+    identity eth { base base-t; }
+    identity ani { base base-t; }
+
+    container ifs {
+        list if {
+            key name;
+            leaf name { type string; }
+            leaf type { type identityref { base base-t; } }
+        }
+    }
+}

@@ -324,6 +324,7 @@ sr_connect(const uint32_t opts, sr_conn_ctx_t **conn_p)
     }
 
     SR_LOG_INF("Connection %" PRIu32 " created.", conn->cid);
+    sr_validate_incr_status_log();
 
 cleanup_unlock:
     /* CREATE UNLOCK */
@@ -370,6 +371,8 @@ sr_disconnect(sr_conn_ctx_t *conn)
     if (!conn) {
         return sr_api_ret(NULL, NULL);
     }
+
+    sr_validate_incr_stats_log();
 
     /* stop all session notification buffer threads, they use read lock so they need conn state in SHM */
     for (i = 0; i < conn->session_count; ++i) {
@@ -4614,14 +4617,14 @@ sr_validate(sr_session_ctx_t *session, const char *module_name, uint32_t timeout
     case SR_DS_STARTUP:
     case SR_DS_RUNNING:
         /* validate only changed modules and any that can become invalid because of the changes */
-        if ((err_info = sr_modinfo_validate(&mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 0, &err_info2))) {
+        if ((err_info = sr_modinfo_validate(&mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 0, 0, &err_info2))) {
             goto cleanup;
         }
         break;
     case SR_DS_CANDIDATE:
     case SR_DS_OPERATIONAL:
         /* validate all the modules because they may be invalid without any changes */
-        if ((err_info = sr_modinfo_validate(&mod_info, MOD_INFO_REQ | MOD_INFO_INV_DEP, 0, &err_info2))) {
+        if ((err_info = sr_modinfo_validate(&mod_info, MOD_INFO_REQ | MOD_INFO_INV_DEP, 0, 0, &err_info2))) {
             goto cleanup;
         }
         break;
@@ -4719,7 +4722,9 @@ sr_changes_notify_store_conventional(struct sr_mod_info_s *mod_info, sr_session_
 
         /* finish on validation errors */
         err_count = *err_info2 ? (*err_info2)->err_count : 0;
-        if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, err_info2))) {
+
+        /* the stored data were valid and the diff describes every change made to them since */
+        if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, 1, err_info2))) {
             goto cleanup;
         } else if (*err_info2 && ((*err_info2)->err_count > err_count)) {
             goto cleanup;
