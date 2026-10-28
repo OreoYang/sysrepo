@@ -4379,7 +4379,8 @@ sr_changes_notify_store(struct sr_mod_info_s *mod_info, sr_session_ctx_t *sessio
         /* finish on validation errors */
         err_count = *err_info2 ? (*err_info2)->err_count : 0;
 
-        /* the stored data were valid and the diff describes every change made to them since */
+        /* the stored data were valid and the diff describes every change made to them since, incremental validation
+         * relies on both; running copied from startup on boot (sr_shmmod_reboot_init()) was never validated */
         if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, 1, err_info2))) {
             goto cleanup;
         } else if (*err_info2 && ((*err_info2)->err_count > err_count)) {
