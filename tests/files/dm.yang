@@ -1,0 +1,21 @@
+module dm {
+    namespace urn:tests:dm;
+    prefix dm;
+    yang-version 1.1;
+    import dl { prefix dl; }
+
+    container mtop {
+        list mr {
+            key name;
+            leaf name { type string; }
+            leaf iref { type leafref { path "/dl:top/dl:item/dl:name"; } }
+            leaf lone-ref { type leafref { path "/dl:lone/dl:li/dl:name"; } }
+            leaf mcnt { type string; must "count(/dl:top/dl:tag) >= 1"; }
+            leaf manc { type string; must "contains(string(/dl:top/dl:inner), 'x1')"; }
+            leaf manc2 { type string; must "not(contains(string(/dl:top/dl:inner), 'bad'))"; }
+        }
+    }
+    augment "/dl:top/dl:item" {
+        leaf aug-ref { type leafref { path "/dl:top/dl:tag"; } }
+    }
+}

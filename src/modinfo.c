@@ -3391,11 +3391,12 @@ sr_validate_incr_status_log(void)
 void
 sr_validate_incr_stats_log(void)
 {
-    uint64_t calls = 0, fallbacks = 0, late = 0;
+    uint64_t calls = 0, fallbacks = 0, late = 0, shallow = 0;
 
     /* process totals: sysrepo drops the context on every schema change, per-context counters would not survive */
     lyd_validate_incr_stats(NULL, &calls, &fallbacks);
     lyd_validate_incr_late_stats(NULL, &late);
+    lyd_validate_incr_shallow_stats(NULL, &shallow);
     if (!calls) {
         return;
     }
@@ -3403,10 +3404,12 @@ sr_validate_incr_stats_log(void)
     /* the fallback rate decides whether the incremental validator is actually doing anything, the late ones are
      * a rule that deletes data on most edits; it is on by default, so only a fallback is worth a warning */
     if (fallbacks) {
-        SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%), %" PRIu64 " late.",
-                calls, fallbacks, (100.0 * (double)fallbacks) / (double)calls, late);
+        SR_LOG_WRN("Incremental validation: %" PRIu64 " calls, %" PRIu64 " fallbacks (%.1f%%), %" PRIu64 " late, %"
+                PRIu64 " shallow deletes.", calls, fallbacks, (100.0 * (double)fallbacks) / (double)calls, late,
+                shallow);
     } else {
-        SR_LOG_INF("Incremental validation: %" PRIu64 " calls, 0 fallbacks.", calls);
+        SR_LOG_INF("Incremental validation: %" PRIu64 " calls, 0 fallbacks, %" PRIu64 " shallow deletes.", calls,
+                shallow);
     }
 }
 
@@ -3430,6 +3433,10 @@ sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff
         val_opts = LYD_VALIDATE_OPERATIONAL | LYD_VALIDATE_NO_DEFAULTS | LYD_VALIDATE_MULTI_ERROR;
     }
     incr = sr_modinfo_validate_incr(mod_info, diff_is_complete, finish_diff);
+    if (incr) {
+        /* both the incremental and the final calls must see it */
+        val_opts |= LYD_VALIDATE_INCR_SHALLOW_DELETE;
+    }
 
     for (i = 0; i < mod_info->mod_count; ++i) {
         mod = &mod_info->mods[i];

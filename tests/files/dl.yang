@@ -1,0 +1,112 @@
+module dl {
+    namespace urn:tests:dl;
+    prefix dl;
+    yang-version 1.1;
+
+    container top {
+        list item {
+            key name;
+            leaf name { type string; }
+            leaf val { type string; }
+            leaf dd { type string; default "d"; }
+        }
+        leaf-list tag { type string; }
+        leaf-list num { type uint32; }
+        list ou {
+            ordered-by user;
+            key name;
+            leaf name { type string; }
+        }
+        container inner {
+            leaf a { type string; }
+            list x { key name; leaf name { type string; } }
+        }
+        list kr {
+            key k;
+            leaf k { type leafref { path "../../item/name"; } }
+        }
+        list wr {
+            key name;
+            leaf name { type string; }
+            leaf wref { type leafref { path "../../r/w-on"; } }
+        }
+        choice wc {
+            case wcase {
+                when "item[name = 'gate']";
+                leaf wc-v { type string; }
+            }
+            case oc { leaf oc-v { type string; } }
+        }
+        leaf wcr { type leafref { path "../wc-v"; } }
+        list r {
+            key name;
+            leaf name { type string; }
+            leaf sel { type string; }
+            leaf lref { type leafref { path "../../item/name"; } }
+            leaf tref { type leafref { path "../../tag"; } }
+            leaf uref {
+                type union {
+                    type leafref { path "../../item/name"; }
+                    type enumeration { enum none; }
+                }
+            }
+            leaf-list lrefs { type leafref { path "../../item/name"; } }
+            leaf dref { type leafref { path "../../item[name = current()/../sel]/val"; } }
+            leaf m-exist { type string; must "../../item[name = current()/../sel]"; }
+            leaf m-val { type string; must "../../item[name = current()/../sel]/val = 'good'"; }
+            leaf m-count { type string; must "count(../../item) >= 2"; }
+            leaf m-sum { type string; must "sum(../../num) >= 5"; }
+            leaf m-first { type string; must "contains(../../item/val, 'k')"; }
+            leaf m-ou1 { type string; must "../../ou[1]/name = 'first'"; }
+            leaf m-oul { type string; must "../../ou[last()]/name = 'tail'"; }
+            leaf m-dd { type string; must "../../item[name = 'i1']/dd = 'z'"; }
+            leaf m-np { type string; must "/dl:c-np/dl:l"; }
+            leaf m-anc { type string; must "contains(string(../../inner), 'x1')"; }
+            leaf m-anc2 { type string; must "count(../../inner/*) >= 3"; }
+            leaf m-anc3 { type string; must "not(contains(string(../../inner), 'bad'))"; }
+            leaf w-on { type string; when "../../item[name = 'gate']"; }
+            leaf dgate { type string; default "d"; when "../../item[name = 'gate']"; }
+            leaf dw { type string; default "d"; when "../w-on"; }
+            leaf dopen { type string; default "d"; when "not(../../item[name = 'gate'])"; }
+        }
+    }
+
+    container c-mn { presence "p"; leaf keep { type string; } list mn { min-elements 2; key name; leaf name { type string; } } }
+    container c-mt { presence "p"; leaf keep { type string; } leaf-list mt { min-elements 1; type string; } }
+    container c-mp { presence "p"; leaf m { type string; mandatory true; } list l { key name; leaf name { type string; } } }
+    container c-mc {
+        presence "p";
+        leaf keep { type string; }
+        choice k {
+            mandatory true;
+            case ca { list la { key name; leaf name { type string; } } }
+            case cb { leaf-list lb { type string; } }
+        }
+    }
+    container c-dc {
+        leaf keep { type string; }
+        choice mode {
+            default auto;
+            case auto { leaf auto { type string; default "on"; } }
+            case manual { list rule { key id; leaf id { type uint32; } } }
+        }
+    }
+    container c-pc { presence "p"; list l { key name; leaf name { type string; } } }
+    container c-np { list l { key name; leaf name { type string; } } }
+    container c-vk {
+        list vk {
+            key name;
+            leaf name { type string; }
+            leaf grp { type string; must "count(../../vk[grp = current()]) >= 2"; }
+        }
+    }
+    container c-neg {
+        list un { key name; unique u; max-elements 3; leaf name { type string; } leaf u { type string; } }
+        leaf-list mx { max-elements 3; type string; }
+    }
+    container lone { list li { key name; leaf name { type string; } } }
+    container st {
+        config false;
+        list s { key name; leaf name { type string; } leaf sref { type leafref { path "/dl:top/dl:item/dl:name"; } } }
+    }
+}
