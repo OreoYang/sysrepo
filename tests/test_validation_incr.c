@@ -44,6 +44,7 @@ setup_f(void **state)
         TESTS_SRC_DIR "/files/incr-b.yang",
         TESTS_SRC_DIR "/files/incr-c.yang",
         TESTS_SRC_DIR "/files/dl.yang",
+        TESTS_SRC_DIR "/files/dz.yang",
         TESTS_SRC_DIR "/files/dm.yang",
         NULL
     };
@@ -68,7 +69,7 @@ static int
 teardown_f(void **state)
 {
     struct state *st = (struct state *)*state;
-    const char *module_names[] = {"dm", "dl", "incr-c", "incr-b", "incr-a", NULL};
+    const char *module_names[] = {"dz", "dm", "dl", "incr-c", "incr-b", "incr-a", NULL};
 
     sr_remove_modules(st->conn, module_names, 0);
     sr_disconnect(st->conn);
@@ -329,6 +330,8 @@ test_dflt_case_replace(void **state)
 #define DL_R(n, x) "<r><name>" n "</name>" x "</r>"
 #define DL_GATE "<item><name>gate</name></item>"
 #define DM_M(x) "<mtop xmlns=\"urn:tests:dm\"><mr><name>m1</name>" x "</mr></mtop>"
+#define DZ_Z "<zt xmlns=\"urn:tests:dz\"><zr><name>z</name></zr></zt>"
+#define DL_G1 "<grp><name>g1</name><want>w1</want><other>g2</other>"
 #define DL_LONE DL_C("lone", "<li><name>l1</name></li>")
 
 
@@ -410,11 +413,11 @@ static const struct dl_case dl_cases[] = {
     {"when turns true to false", DL_T(DL_GATE DL_R("r", "<w-on>v1</w-on>")), {"-" DL_P "item[name='gate']"}, E_OK},
     {"when turns false, a leafref reads the dropped node", DL_T(DL_GATE DL_R("r", "<w-on>v1</w-on>")
         "<wr><name>w1</name><wref>v1</wref></wr>"), {"-" DL_P "item[name='gate']"}, E_BAD},
-    {"when turns false to true, a default appears", DL_T(DL_GATE DL_R("r", "<sel>x</sel>")),
+    {"when turns false to true, a default appears", DL_T(DL_GATE DL_R("r", "<sel>x</sel>")) DZ_Z,
         {"-" DL_P "item[name='gate']"}, E_OK},
-    {"default node whose when reads the deleted instance", DL_T(DL_GATE DL_R("r", "<sel>x</sel>")),
+    {"default node whose when reads the deleted instance", DL_T(DL_GATE DL_R("r", "<sel>x</sel>")) DZ_Z,
         {"-" DL_P "item[name='gate']"}, E_OK},
-    {"default node whose when reads a node the validation drops", DL_T(DL_GATE DL_R("r", "<w-on>v1</w-on>")),
+    {"default node whose when reads a node the validation drops", DL_T(DL_GATE DL_R("r", "<w-on>v1</w-on>")) DZ_Z,
         {"-" DL_P "item[name='gate']"}, E_OK},
     {"when of a case turns false", DL_T(DL_GATE "<wc-v>cv</wc-v>") DL_LONE, {"-" DL_P "item[name='gate']"}, E_OK},
     {"when of a case turns false, a leafref reads it", DL_T(DL_GATE "<wc-v>cv</wc-v><wcr>cv</wcr>"),
@@ -503,8 +506,8 @@ static const struct dl_case dl_cases[] = {
 };
 
 static const char *const dl_roots[] = {
-    "/dm:mtop", "/dl:top", "/dl:lone", "/dl:c-mn", "/dl:c-mt", "/dl:c-mp", "/dl:c-mc", "/dl:c-dc", "/dl:c-pc",
-    "/dl:c-np", "/dl:c-vk", "/dl:c-neg", NULL
+    "/dz:zt", "/dm:mtop", "/dl:top", "/dl:lone", "/dl:c-mn", "/dl:c-mt", "/dl:c-mp", "/dl:c-mc", "/dl:c-dc", "/dl:c-pc",
+    "/dl:c-np", "/dl:c-vk", "/dl:c-neg", "/dl:pr", NULL
 };
 
 static void
@@ -605,6 +608,299 @@ static const struct dl_case dl_ancestor_cases[] = {
         "<x><name>x1</name></x></inner>") DM_M("<manc2>y</manc2>"), {DL_P "inner/a", "bad"}, E_BAD},
 };
 
+/*
+ * Constructs of the YANG language that no other case reads, each one a delete that full validation rejects.
+ * The deref and instance-identifier cases of the libyang test end in an error code other than a validation failure
+ * and are left there.
+ */
+static const struct dl_case dl_probe_cases[] = {
+    {"descendant axis counts the nodes below a container", DL_T("<inner><x><name>x1</name></x><x><name>x2</name></x></inner>"
+        DL_R("r", "<m-desc>y</m-desc>")), {"-" DL_P "inner/x[name='x1']"}, E_BAD},
+    {"a default leaf-list value appears when the explicit one goes", DL_T("<dtag>x</dtag>" DL_R("r", "<m-dflt>y</m-dflt>")),
+        {"-" DL_P "dtag[.='x']"}, E_BAD},
+    {"later sibling of the same list is read", DL_T(DL_R("r1", "<m-fs>y</m-fs>") DL_R("r2", "")),
+        {"-" DL_P "r[name='r2']"}, E_BAD},
+    {"earlier sibling is read by the preceding axis", DL_T("<pos><name>a</name></pos><pos><name>b</name><pp>y</pp></pos>"),
+        {"-" DL_P "pos[name='a']"}, E_BAD},
+    {"reader in the same list instance, member of a nested list", DL_T("<grp><name>g1</name><mem><name>a</name></mem>"
+        "<mem><name>b</name></mem><need>y</need></grp>"), {"-" DL_P "grp[name='g1']/mem[name='a']"}, E_BAD},
+    {"reader in another instance, member of a nested list", DL_T("<grp><name>g1</name><mem><name>a</name></mem>"
+        "<mem><name>b</name></mem></grp><grp><name>g2</name><mem><name>c</name></mem><xr>y</xr></grp>"),
+        {"-" DL_P "grp[name='g1']/mem[name='a']"}, E_BAD},
+    {"reader inside a sibling list instance reads the list", DL_T("<inner><x><name>x1</name></x><x><name>x2</name>"
+        "<chk>y</chk></x></inner>"), {"-" DL_P "inner/x[name='x1']"}, E_BAD},
+    {"count of one leaf-list value", DL_T("<tag>t1</tag><tag>t2</tag>" DL_R("r", "<m-ttag>y</m-ttag>")),
+        {"-" DL_P "tag[.='t1']"}, E_BAD},
+    {"count of every child of the container", DL_T("<tag>t1</tag><tag>t2</tag><num>1</num><num>2</num><inner/>"
+        DL_R("r", "<m-alln>y</m-alln>")), {"-" DL_P "tag[.='t1']"}, E_BAD},
+};
+
+/*
+ * Adds and modifies that full validation rejects, through a rule that reads another instance of the same list by a
+ * relative path, see the libyang test of the same name.
+ */
+static const struct dl_case dl_add_cases[] = {
+    /* LOCAL */
+    {"add: LOCAL leafref without target", DL_T(DL_I("i1", "a")), {DL_P "wcr", "x"}, E_BAD},
+    {"add: LOCAL leafref with target", DL_T(DL_GATE "<wc-v>x</wc-v>"), {DL_P "wcr", "x"}, E_OK},
+    /* LIST_SCOPE */
+    {"add: LIST_SCOPE must counts the children, too few", DL_T("<grp><name>g1</name><mem><name>a</name></mem></grp>"),
+        {DL_P "grp[name='g1']/need", "y"}, E_BAD},
+    {"add: LIST_SCOPE must counts the children, enough", DL_T("<grp><name>g1</name><mem><name>a</name></mem>"
+        "<mem><name>b</name></mem></grp>"), {DL_P "grp[name='g1']/need", "y"}, E_OK},
+    {"add: LIST_SCOPE reader of a template, component missing",
+        DL_T("<tpl><name>t1</name><comp><name>c1</name><cls>ok</cls></comp></tpl>"),
+        {DL_P "tpl[name='t1']/ifc[name='i1']/hw", "c9"}, E_BAD},
+    {"add: LIST_SCOPE reader of a template, component there",
+        DL_T("<tpl><name>t1</name><comp><name>c1</name><cls>ok</cls></comp></tpl>"),
+        {DL_P "tpl[name='t1']/ifc[name='i1']/hw", "c1"}, E_OK},
+    /* BOUNDED */
+    {"add: BOUNDED not() over a relative path finds what was added", DL_T(DL_G1 "<nx>y</nx></grp>"
+        "<grp><name>g2</name><mem><name>a</name></mem></grp>"), {DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_BAD},
+    {"add: BOUNDED count() over a relative path finds what was added", DL_T(DL_G1 "<nc>y</nc></grp>"
+        "<grp><name>g2</name><mem><name>a</name></mem></grp>"), {DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_BAD},
+    {"add: BOUNDED count() climbs on after a predicate, finds what was added", DL_T(DL_G1 "<mem><name>x</name></mem>"
+        "<pc><np>y</np></pc></grp><grp><name>g2</name><mem><name>a</name></mem></grp>"),
+        {DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_BAD},
+    {"add: BOUNDED creation-safe reader, an unrelated instance is added",
+        DL_T(DL_I("i1", "good") DL_R("r", "<sel>i1</sel><m-val>y</m-val>")),
+        {DL_P "item[name='i2']/val", "bad"}, E_OK},
+    {"add: BOUNDED reader added, its target is missing", DL_T(DL_I("i1", "good")),
+        {DL_P "r[name='r2']/sel", "nope", DL_P "r[name='r2']/m-exist", "y"}, E_BAD},
+    /* UNBOUNDED */
+    {"add: UNBOUNDED upper bound count over an absolute path, one too many",
+        DL_T(DL_I("i1", "a") DL_I("i2", "a") DL_I("i3", "a") DL_R("r", "<m-cap>y</m-cap>")),
+        {DL_P "item[name='i4']/val", "a"}, E_BAD},
+    {"add: UNBOUNDED upper bound count over an absolute path, at the limit",
+        DL_T(DL_I("i1", "a") DL_I("i2", "a") DL_R("r", "<m-cap>y</m-cap>")), {DL_P "item[name='i3']/val", "a"}, E_OK},
+    {"add: UNBOUNDED lower bound count, an instance is added", DL_T(DL_I("i1", "a") DL_I("i2", "a")
+        DL_R("r", "<m-count>y</m-count>")), {DL_P "item[name='i3']/val", "a"}, E_OK},
+    {"add: UNBOUNDED reader added, leafref without target", DL_T(DL_I("i1", "a")), {DL_P "r[name='n']/lref", "nope"}, E_BAD},
+    {"add: UNBOUNDED when over another instance, the gate is missing", DL_T(DL_I("i1", "a") DL_R("r", "")),
+        {DL_P "r[name='r']/w-on", "v"}, E_BAD},
+    {"add: UNBOUNDED when over another instance, the gate is there", DL_T(DL_GATE DL_R("r", "")),
+        {DL_P "r[name='r']/w-on", "v"}, E_OK},
+    {"add: UNBOUNDED must counts the sibling instances, alone", DL_T("<inner><a>a</a></inner>"),
+        {DL_P "inner/x[name='x1']/chk", "y"}, E_BAD},
+    {"add: UNBOUNDED must counts the earlier siblings, first one", DL_T(DL_I("i1", "a")),
+        {DL_P "pos[name='a']/pp", "y"}, E_BAD},
+    {"add: structure, max-elements of a list", DL_C("c-neg", "<un><name>a</name></un><un><name>b</name></un>"
+        "<un><name>c</name></un>"), {"/dl:c-neg/un[name='d']", NULL}, E_BAD},
+    {"add: structure, unique value twice", DL_C("c-neg", "<un><name>a</name><u>1</u></un>"),
+        {"/dl:c-neg/un[name='b']/u", "1"}, E_BAD},
+    /* CASCADE */
+    {"add: CASCADE the when turns false, the node goes", DL_T(DL_G1 "<wn>y</wn></grp>"
+        "<grp><name>g2</name><mem><name>a</name></mem></grp>"), {DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_OK},
+    {"add: CASCADE a default appears and another goes", DL_T(DL_I("i1", "a")) DZ_Z,
+        {DL_P "item[name='gate']/val", "a"}, E_OK},
+    /* the first adds, kept */
+    {"add a leaf in front of the one a rule reads", DL_T("<grp><name>g1</name><nf>y</nf></grp>"
+        "<grp><name>g2</name><lv>ok</lv></grp>"), {DL_P "grp[name='g2']/lv", "no"}, E_BAD},
+};
+
+static const struct dl_case dl_modify_cases[] = {
+    /* LOCAL */
+    {"modify: LOCAL leafref target changes", DL_T(DL_GATE "<wc-v>a</wc-v><wcr>a</wcr>"), {DL_P "wc-v", "b"}, E_BAD},
+    {"modify: LOCAL leafref and target change together", DL_T(DL_GATE "<wc-v>a</wc-v><wcr>a</wcr>"),
+        {DL_P "wc-v", "b", DL_P "wcr", "b"}, E_OK},
+    /* LIST_SCOPE */
+    {"modify: LIST_SCOPE component class changes, an interface uses it",
+        DL_T("<tpl><name>t1</name><comp><name>c1</name><cls>ok</cls></comp>"
+        "<ifc><name>i1</name><hw>c1</hw></ifc></tpl>"), {DL_P "tpl[name='t1']/comp[name='c1']/cls", "no"}, E_BAD},
+    {"modify: LIST_SCOPE component class changes, nothing uses it",
+        DL_T("<tpl><name>t1</name><comp><name>c1</name><cls>ok</cls></comp><comp><name>c2</name><cls>ok</cls></comp>"
+        "<ifc><name>i1</name><hw>c1</hw></ifc></tpl>"), {DL_P "tpl[name='t1']/comp[name='c2']/cls", "no"}, E_OK},
+    /* BOUNDED */
+    {"modify: BOUNDED must reads the value of the instance it picks",
+        DL_T(DL_I("i1", "good") DL_R("r", "<sel>i1</sel><m-val>y</m-val>")), {DL_P "item[name='i1']/val", "bad"}, E_BAD},
+    {"modify: BOUNDED must, an unrelated instance changes",
+        DL_T(DL_I("i1", "good") DL_I("i2", "x") DL_R("r", "<sel>i1</sel><m-val>y</m-val>")),
+        {DL_P "item[name='i2']/val", "bad"}, E_OK},
+    {"modify: BOUNDED leafref to the value of the instance it picks",
+        DL_T(DL_I("i1", "v1") DL_R("r", "<sel>i1</sel><dref>v1</dref>")), {DL_P "item[name='i1']/val", "v2"}, E_BAD},
+    {"modify: BOUNDED not() over a relative path, the leaf it names changes",
+        DL_T(DL_G1 "<nx>y</nx></grp><grp><name>g2</name><mem><name>a</name></mem></grp>"),
+        {DL_P "grp[name='g1']/want", "a"}, E_BAD},
+    /* UNBOUNDED */
+    {"modify: UNBOUNDED must reads a leaf of a named instance",
+        DL_T("<item><name>i1</name><dd>z</dd></item>" DL_R("r", "<m-dd>y</m-dd>")), {DL_P "item[name='i1']/dd", "y"}, E_BAD},
+    {"modify: UNBOUNDED must, another instance changes",
+        DL_T("<item><name>i1</name><dd>z</dd></item>" DL_I("i2", "a") DL_R("r", "<m-dd>y</m-dd>")),
+        {DL_P "item[name='i2']/dd", "y"}, E_OK},
+    {"modify: UNBOUNDED must reads a leaf of another list instance",
+        DL_T("<grp><name>g1</name><mv>y</mv></grp><grp><name>g2</name><lv>ok</lv></grp>"),
+        {DL_P "grp[name='g2']/lv", "no"}, E_BAD},
+    {"modify: UNBOUNDED must reads a leaf of another list instance, a different instance changes",
+        DL_T("<grp><name>g1</name><mv>y</mv><lv>a</lv></grp><grp><name>g2</name><lv>ok</lv></grp>"),
+        {DL_P "grp[name='g1']/lv", "b"}, E_OK},
+    {"modify: UNBOUNDED must reads the text of a container",
+        DL_T("<inner><a>a</a><x><name>x1</name></x></inner>" DL_R("r", "<m-anc3>y</m-anc3>")),
+        {DL_P "inner/a", "bad"}, E_BAD},
+    {"modify: UNBOUNDED value keyed count, a value leaves its group",
+        DL_C("c-vk", "<vk><name>a</name><grp>g</grp></vk><vk><name>b</name><grp>g</grp></vk>"
+        "<vk><name>c</name><grp>g</grp></vk>"), {"/dl:c-vk/vk[name='c']/grp", "h"}, E_BAD},
+    /* CASCADE */
+    {"modify: CASCADE the when turns false, the node is dropped, a reader needs it",
+        DL_T(DL_R("r", "<sw>on</sw><dep>x</dep><m-dep>y</m-dep>")), {DL_P "r[name='r']/sw", "off"}, E_BAD},
+    {"modify: CASCADE the when turns false, the node is dropped, nothing reads it",
+        DL_T(DL_R("r", "<sw>on</sw><dep>x</dep>")), {DL_P "r[name='r']/sw", "off"}, E_OK},
+};
+
+static void
+test_add_relative_readers(void **state)
+{
+    dl_run((struct state *)*state, dl_add_cases, sizeof dl_add_cases / sizeof *dl_add_cases);
+}
+
+static void
+test_modify_rules(void **state)
+{
+    dl_run((struct state *)*state, dl_modify_cases, sizeof dl_modify_cases / sizeof *dl_modify_cases);
+}
+
+/*
+ * The rules of the product schema, one shape each. The names are not the product names, the expressions are. Every
+ * case is an add or a modify, and the expectation is what full validation says.
+ */
+#define PR_P "/dl:pr/"
+#define PR_T(x) DL_C("pr", x)
+#define PR_SH "<shaper><name>s1</name><single>y</single></shaper><shaper><name>s2</name><two>y</two></shaper>"
+#define PR_Q(d, sh) "<qprof><name>q1</name><queues><queue><name>a</name>" d "<shaper-name>" sh "</shaper-name></queue></queues></qprof>"
+#define PR_TM "<tmpl><name>t1</name><ifc><name>i1</name><v4>y</v4></ifc></tmpl><tmpl><name>t2</name><ifc><name>i1</name><v4>y</v4></ifc>" \
+        "<ifc><name>i2</name><v4>y</v4></ifc></tmpl><tmpl><name>t3</name><ifc><name>i9</name><v4>y</v4></ifc></tmpl>"
+#define PR_ONU(x) "<onu><name>o1</name><tref>t1</tref><term><name>x</name>" x "</term></onu>"
+#define PR_REV(c, r) "<comp><name>c1</name><revs>" c r "</revs></comp>"
+#define PR_TP(x) "<tp><name>p1</name><tcs>" x "</tcs></tp>"
+#define PR_TC(n, d) "<tc><position>" n "</position><duration>" d "</duration></tc>"
+#define PR_TS "<tsb><name>b1</name><pk><name>k1</name><fmt xmlns:dl=\"urn:tests:dl\">dl:fmt-ssh</fmt></pk></tsb><tsb><name>b2</name><pk><name>k2</name><fmt xmlns:dl=\"urn:tests:dl\">dl:fmt-other</fmt></pk></tsb>"
+static const struct dl_case dl_prod_cases[] = {
+    /* the queue shaper must: not(boolean(dual)) and boolean(shaper/single), or the same with dual and two */
+    {"product QoS: dual added, the shaper has only a single bucket", PR_T(PR_SH PR_Q("", "s1")),
+        {PR_P "qprof[name='q1']/queues/queue[name='a']/dual", "y"}, E_BAD},
+    {"product QoS: dual added and the shaper moved to the two bucket one", PR_T(PR_SH PR_Q("", "s1")),
+        {PR_P "qprof[name='q1']/queues/queue[name='a']/dual", "y", PR_P "qprof[name='q1']/queues/queue[name='a']/shaper-name", "s2"}, E_OK},
+    {"product QoS: dual removed, the shaper has only a two bucket", PR_T(PR_SH PR_Q("<dual>y</dual>", "s2")),
+        {"-" PR_P "qprof[name='q1']/queues/queue[name='a']/dual"}, E_BAD},
+    {"product QoS: single bucket removed from the shaper in use", PR_T(PR_SH PR_Q("", "s1")),
+        {"-" PR_P "shaper[name='s1']/single"}, E_BAD},
+    {"product QoS: two bucket added to the shaper in use, the single one stays", PR_T(PR_SH PR_Q("", "s1")),
+        {PR_P "shaper[name='s1']/two", "y"}, E_OK},
+    {"product QoS: shaper moved to one with only a two bucket", PR_T(PR_SH PR_Q("", "s1")),
+        {PR_P "qprof[name='q1']/queues/queue[name='a']/shaper-name", "s2"}, E_BAD},
+    {"product QoS: a shaper nobody uses gets a bucket", PR_T(PR_SH "<shaper><name>s3</name></shaper>" PR_Q("", "s1")),
+        {PR_P "shaper[name='s3']/two", "y"}, E_OK},
+    /* when over an absolute path, bounded and creation-safe */
+    {"product QoS: BOUNDED when, burst added, the shaper has a single bucket",
+        PR_T(PR_SH "<bq><name>b</name><sref>s1</sref></bq>"), {PR_P "bq[name='b']/burst", "y"}, E_OK},
+    {"product QoS: BOUNDED when, burst added, the shaper has no single bucket",
+        PR_T(PR_SH "<bq><name>b</name><sref>s2</sref></bq>"), {PR_P "bq[name='b']/burst", "y"}, E_BAD},
+    {"product QoS: CASCADE BOUNDED when, single bucket removed under a burst, the node is dropped",
+        PR_T(PR_SH "<bq><name>b</name><sref>s1</sref><burst>y</burst></bq>"), {"-" PR_P "shaper[name='s1']/single"}, E_OK},
+    {"product QoS: CASCADE BOUNDED when, sref moved under a burst, the node is dropped",
+        PR_T(PR_SH "<bq><name>b</name><sref>s1</sref><burst>y</burst></bq>"), {PR_P "bq[name='b']/sref", "s2"}, E_OK},
+    /* ancestor:: axis inside a predicate */
+    {"product ONU: interface not in the template of the ONU", PR_T(PR_TM PR_ONU("")),
+        {PR_P "onu[name='o1']/term[name='x']/ipif", "i2"}, E_BAD},
+    {"product ONU: interface in the template of the ONU", PR_T(PR_TM PR_ONU("")),
+        {PR_P "onu[name='o1']/term[name='x']/ipif", "i1"}, E_OK},
+    {"product ONU: the address of the interface is removed from the template", PR_T(PR_TM PR_ONU("<ipif>i1</ipif>")),
+        {"-" PR_P "tmpl[name='t1']/ifc[name='i1']/v4"}, E_BAD},
+    {"product ONU: the v4 address is removed, a v6 one stays", PR_T(PR_TM PR_ONU("<ipif>i1</ipif>")),
+        {PR_P "tmpl[name='t1']/ifc[name='i1']/v6", "y", "-" PR_P "tmpl[name='t1']/ifc[name='i1']/v4"}, E_OK},
+    {"product ONU: the ONU moves to a template without the interface", PR_T(PR_TM PR_ONU("<ipif>i1</ipif>")),
+        {PR_P "onu[name='o1']/tref", "t3"}, E_BAD},
+    {"product ONU: the ONU moves to a template with the interface", PR_T(PR_TM PR_ONU("<ipif>i1</ipif>")),
+        {PR_P "onu[name='o1']/tref", "t2"}, E_OK},
+    {"product ONU: LOCAL leafref to a sibling instance, missing", PR_T(PR_TM PR_ONU("")),
+        {PR_P "onu[name='o1']/term[name='y']/peer", "nope"}, E_BAD},
+    {"product ONU: LOCAL leafref to a sibling instance, there", PR_T(PR_TM PR_ONU("")),
+        {PR_P "onu[name='o1']/term[name='y']/peer", "x"}, E_OK},
+    /* when with boolean(), derived-from() and count() over the siblings */
+    {"product SWM: when boolean(capability=x), the leaf is added and the capability fits",
+        PR_T(PR_REV("<cap>alias</cap>", "<rev><name>r1</name><state>available</state></rev>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/alias", "y"}, E_OK},
+    {"product SWM: when boolean(capability=x), the leaf is added and the capability does not fit",
+        PR_T(PR_REV("<cap>other</cap>", "<rev><name>r1</name><state>available</state></rev>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/alias", "y"}, E_BAD},
+    {"product SWM: CASCADE when boolean(capability=x), the capability changes under the leaf, the node is dropped",
+        PR_T(PR_REV("<cap>alias</cap>", "<rev><name>r1</name><state>available</state><alias>y</alias></rev>")),
+        {PR_P "comp[name='c1']/revs/cap", "other"}, E_OK},
+    {"product SWM: when with a state test, the state fits",
+        PR_T(PR_REV("<cap>act</cap>", "<rev><name>r1</name><state>in-use</state></rev>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/act", "y"}, E_OK},
+    {"product SWM: when with a state test, the state does not fit",
+        PR_T(PR_REV("<cap>act</cap>", "<rev><name>r1</name><state>new</state></rev>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/act", "y"}, E_BAD},
+    {"product SWM: CASCADE when with a state test, the state changes under the leaf, the node is dropped",
+        PR_T(PR_REV("<cap>act</cap>", "<rev><name>r1</name><state>available</state><act>y</act></rev>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/state", "new"}, E_OK},
+    {"product SWM: CASCADE plain derived-from(), capability changes under the leaf, the node is dropped",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state><fin>y</fin></rev>")),
+        {PR_P "comp[name='c1']/revs/dcap", "cap-other"}, E_OK},
+    {"product SWM: derived-from() and count()=0, download added, nothing downloads",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state></rev>")),
+        {PR_P "comp[name='c1']/revs/download", "y"}, E_OK},
+    {"product SWM: derived-from() and count()=0, download added while a revision downloads",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>downloading</state></rev>")),
+        {PR_P "comp[name='c1']/revs/download", "y"}, E_BAD},
+    {"product SWM: CASCADE count()=0, a revision starts to download under the leaf, the node is dropped",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state></rev><download>y</download>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r1']/state", "downloading"}, E_OK},
+    {"product SWM: CASCADE count()=0, a revision that downloads is added under the leaf, the node is dropped",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state></rev><download>y</download>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r2']/state", "downloading"}, E_OK},
+    {"product SWM: count()=0, a revision that does not download is added under the leaf",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state></rev><download>y</download>")),
+        {PR_P "comp[name='c1']/revs/rev[name='r2']/state", "available"}, E_OK},
+    {"product SWM: CASCADE derived-from(), capability changes under the download leaf, the node is dropped",
+        PR_T(PR_REV("<dcap xmlns:dl=\"urn:tests:dl\">dl:cap-sub</dcap>", "<rev><name>r1</name><state>available</state></rev><download>y</download>")),
+        {PR_P "comp[name='c1']/revs/dcap", "cap-other"}, E_OK},
+    /* a list keyed by position, and rules that read the leaf named position */
+    {"product tone: the next position is added", PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "b"))),
+        {PR_P "tp[name='p1']/tcs/tc[position='3']/duration", "c"}, E_OK},
+    {"product tone: a position is added after a gap", PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "b"))),
+        {PR_P "tp[name='p1']/tcs/tc[position='5']/duration", "c"}, E_BAD},
+    {"product tone: repetition added, the last component is not continuous", PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "b"))),
+        {PR_P "tp[name='p1']/tcs/rb", "y"}, E_OK},
+    {"product tone: repetition added, the last component is continuous", PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "continuous"))),
+        {PR_P "tp[name='p1']/tcs/rb", "y"}, E_BAD},
+    {"product tone: repetition added, only one component", PR_T(PR_TP(PR_TC("1", "a"))),
+        {PR_P "tp[name='p1']/tcs/rb", "y"}, E_BAD},
+    {"product tone: CASCADE the last component becomes continuous under the repetition, the node is dropped",
+        PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "b") "<rb>y</rb>")),
+        {PR_P "tp[name='p1']/tcs/tc[position='2']/duration", "continuous"}, E_OK},
+    {"product tone: CASCADE a continuous component is added last under the repetition, the node is dropped",
+        PR_T(PR_TP(PR_TC("1", "a") PR_TC("2", "b") "<rb>y</rb>")),
+        {PR_P "tp[name='p1']/tcs/tc[position='3']/duration", "continuous"}, E_OK},
+    /* deref() with a predicate that has not(derived-from-or-self()) inside */
+    {"product truststore: the format of a key in use changes", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "tsb[name='b1']/pk[name='k1']/fmt", "fmt-other"}, E_BAD},
+    {"product truststore: a key with another format is added to the bag in use", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "tsb[name='b1']/pk[name='k3']/fmt", "fmt-other"}, E_BAD},
+    {"product truststore: a key with the right format is added to the bag in use", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "tsb[name='b1']/pk[name='k3']/fmt", "fmt-ssh"}, E_OK},
+    {"product truststore: a bag with another format is not used, its key changes", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "tsb[name='b2']/pk[name='k2']/fmt", "fmt-ssh"}, E_OK},
+    {"product truststore: a user is added on the good bag", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "usr[name='u2']/ref", "b1"}, E_OK},
+    {"product truststore: a user is added on the bag with another format", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "usr[name='u2']/ref", "b2"}, E_BAD},
+    {"product truststore: a user moves to the bag with another format", PR_T(PR_TS "<usr><name>u1</name><ref>b1</ref></usr>"),
+        {PR_P "usr[name='u1']/ref", "b2"}, E_BAD},
+};
+
+static void
+test_product_shapes(void **state)
+{
+    dl_run((struct state *)*state, dl_prod_cases, sizeof dl_prod_cases / sizeof *dl_prod_cases);
+}
+
+static void
+test_delete_yang_probe(void **state)
+{
+    dl_run((struct state *)*state, dl_probe_cases, sizeof dl_probe_cases / sizeof *dl_probe_cases);
+}
+
 static void
 test_delete_ancestor_reader(void **state)
 {
@@ -623,6 +919,10 @@ main(void)
         cmocka_unit_test_teardown(test_dflt_case_replace, clear_data),
         cmocka_unit_test_teardown(test_delete_matrix, clear_data),
         cmocka_unit_test_teardown(test_delete_ancestor_reader, clear_data),
+        cmocka_unit_test_teardown(test_delete_yang_probe, clear_data),
+        cmocka_unit_test_teardown(test_add_relative_readers, clear_data),
+        cmocka_unit_test_teardown(test_modify_rules, clear_data),
+        cmocka_unit_test_teardown(test_product_shapes, clear_data),
     };
 
     setenv("CMOCKA_TEST_ABORT", "1", 1);

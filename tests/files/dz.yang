@@ -1,0 +1,15 @@
+module dz {
+    namespace urn:tests:dz;
+    prefix dz;
+    yang-version 1.1;
+    import dl { prefix dl; }
+
+    container zt {
+        list zr {
+            key name;
+            leaf name { type string; }
+            leaf dgate { type string; default "d"; when "/dl:top/dl:item[dl:name = 'gate']"; }
+            leaf dopen { type string; default "d"; when "not(/dl:top/dl:item[dl:name = 'gate'])"; }
+        }
+    }
+}

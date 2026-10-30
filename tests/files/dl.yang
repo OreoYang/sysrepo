@@ -19,7 +19,36 @@ module dl {
         }
         container inner {
             leaf a { type string; }
-            list x { key name; leaf name { type string; } }
+            list x { key name; leaf name { type string; } leaf chk { type string; must "count(../../x) >= 2"; } }
+        }
+        leaf-list dtag { type string; default "d1"; }
+        list pos { key name; leaf name { type string; }
+            leaf pp { type string; must "count(../preceding-sibling::pos) >= 1"; } }
+        list grp {
+            key name;
+            leaf name { type string; }
+            list mem { key name; leaf name { type string; } }
+            leaf need { type string; must "count(../mem) >= 2"; }
+            leaf xr { type string; must "count(../../grp/mem) >= 3"; }
+            leaf want { type string; }
+            leaf other { type string; }
+            leaf lv { type string; }
+            leaf nx { type string; must "not(../../grp[name = current()/../other]/mem[name = current()/../want])"; }
+            leaf nc { type string; must "count(../../grp[name = current()/../other]/mem[name = current()/../want]) = 0"; }
+            leaf nf { type string; must "contains(../../grp[name = 'g2']/lv, 'ok')"; }
+            leaf mv { type string; must "../../grp[name = 'g2']/lv = 'ok'"; }
+            leaf wn { type string; when "not(../../grp[name = current()/../other]/mem[name = current()/../want])"; }
+            container pc { leaf np { type string; must "count(../../mem[name = 'x']/../../grp[name = current()/../../other]/mem[name = current()/../../want]) = 0"; } }
+        }
+        list tpl {
+            key name;
+            leaf name { type string; }
+            list comp { key name; leaf name { type string; } leaf cls { type string; } }
+            list ifc {
+                key name;
+                leaf name { type string; }
+                leaf hw { type string; must "../../comp[name = current()]/cls = 'ok'"; }
+            }
         }
         list kr {
             key k;
@@ -61,13 +90,22 @@ module dl {
             leaf m-oul { type string; must "../../ou[last()]/name = 'tail'"; }
             leaf m-dd { type string; must "../../item[name = 'i1']/dd = 'z'"; }
             leaf m-np { type string; must "/dl:c-np/dl:l"; }
+            leaf m-desc { type string; must "count(../../inner//dl:name) >= 2"; }
+            leaf lrf { type leafref { path "../../item/name"; require-instance false; } }
+            leaf m-der { type string; must "deref(../lrf)/../val = 'good'"; }
+            leaf m-dflt { type string; must "../../dtag = 'x'"; }
+            leaf m-fs { type string; must "count(../following-sibling::r) >= 1"; }
+            leaf m-ttag { type string; must "count(../../tag[. = 't1']) = 1"; }
+            leaf m-alln { type string; must "count(/dl:top/*) >= 7"; }
             leaf m-anc { type string; must "contains(string(../../inner), 'x1')"; }
             leaf m-anc2 { type string; must "count(../../inner/*) >= 3"; }
             leaf m-anc3 { type string; must "not(contains(string(../../inner), 'bad'))"; }
+            leaf m-cap { type string; must "count(/dl:top/dl:item) <= 3"; }
+            leaf sw { type string; }
+            leaf dep { type string; when "../sw = 'on'"; }
+            leaf m-dep { type string; must "../dep"; }
             leaf w-on { type string; when "../../item[name = 'gate']"; }
-            leaf dgate { type string; default "d"; when "../../item[name = 'gate']"; }
             leaf dw { type string; default "d"; when "../w-on"; }
-            leaf dopen { type string; default "d"; when "not(../../item[name = 'gate'])"; }
         }
     }
 
@@ -109,4 +147,86 @@ module dl {
         config false;
         list s { key name; leaf name { type string; } leaf sref { type leafref { path "/dl:top/dl:item/dl:name"; } } }
     }
+identity cap-base;
+identity cap-download { base cap-base; }
+identity cap-sub { base cap-download; }
+identity cap-other { base cap-base; }
+identity fmt-base;
+identity fmt-ssh { base fmt-base; }
+identity fmt-other { base fmt-base; }
+
+container pr {
+    list shaper { key name; leaf name { type string; } leaf single { type string; } leaf two { type string; } }
+    list qprof {
+        key name;
+        leaf name { type string; }
+        container queues {
+            list queue {
+                key name;
+                leaf name { type string; }
+                leaf dual { type string; }
+                leaf shaper-name {
+                    type leafref { path "/dl:pr/dl:shaper/dl:name"; }
+                    must "(not(boolean(current()/../dual)) and boolean(/dl:pr/dl:shaper[dl:name=current()]/dl:single)) or (boolean(current()/../dual) and boolean(/dl:pr/dl:shaper[dl:name=current()]/dl:two))";
+                }
+            }
+        }
+    }
+    list bq {
+        key name;
+        leaf name { type string; }
+        leaf sref { type leafref { path "/dl:pr/dl:shaper/dl:name"; } }
+        leaf burst { type string; when "boolean(/dl:pr/dl:shaper[dl:name=current()/../sref]/dl:single)"; }
+    }
+    list tmpl { key name; leaf name { type string; } list ifc { key name; leaf name { type string; } leaf v4 { type string; } leaf v6 { type string; } } }
+    list onu {
+        key name;
+        leaf name { type string; }
+        leaf tref { type string; }
+        list term {
+            key name;
+            leaf name { type string; }
+            leaf peer { type leafref { path "../../term/name"; } }
+            leaf ipif {
+                type string;
+                must "boolean(/dl:pr/dl:tmpl[dl:name=current()/ancestor::dl:onu/dl:tref]/dl:ifc[dl:name=current()]/dl:v4) or boolean(/dl:pr/dl:tmpl[dl:name=current()/ancestor::dl:onu/dl:tref]/dl:ifc[dl:name=current()]/dl:v6)";
+            }
+        }
+    }
+    list comp {
+        key name;
+        leaf name { type string; }
+        container revs {
+            leaf cap { type string; }
+            leaf dcap { type identityref { base cap-base; } }
+            list rev {
+                key name;
+                leaf name { type string; }
+                leaf state { type string; }
+                leaf alias { type string; when "boolean(../../cap='alias')"; }
+                leaf act { type string; when "boolean(../../cap='act') and (../state='available' or ../state='in-use')"; }
+                leaf fin { type string; when "derived-from(../../dcap, 'dl:cap-download') and ../state != 'downloading'"; }
+            }
+            leaf download { type string; when "derived-from(../dcap, 'dl:cap-download') and count(../rev[state='downloading'])=0"; }
+        }
+    }
+    list tp {
+        key name;
+        leaf name { type string; }
+        container tcs {
+            must "not(boolean(tc)) or tc[not(../tc/position > position)]/position <= count(current()/tc)";
+            list tc { key position; leaf position { type uint32; } leaf duration { type string; } }
+            leaf rb { type string; when "(count(../tc) > 1) and ../tc[position=count(../tc)]/duration != 'continuous'"; }
+        }
+    }
+    list tsb { key name; leaf name { type string; } list pk { key name; leaf name { type string; } leaf fmt { type identityref { base fmt-base; } } } }
+    list usr {
+        key name;
+        leaf name { type string; }
+        leaf ref {
+            type leafref { path "/dl:pr/dl:tsb/dl:name"; }
+            must "not(deref(.)/../dl:pk/dl:fmt[not(derived-from-or-self(., 'dl:fmt-ssh'))])";
+        }
+    }
+}
 }
