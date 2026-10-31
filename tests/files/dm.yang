@@ -18,4 +18,11 @@ module dm {
     augment "/dl:top/dl:item" {
         leaf aug-ref { type leafref { path "/dl:top/dl:tag"; } }
     }
+    augment "/dl:gp/dl:g" {
+        leaf xw-when { type string; when "../dl:b"; }
+        leaf xn-when { type string; when "not(../dl:b)"; }
+        leaf xm-must { type string; must "not(../dl:b)"; }
+        leaf xc-must { type string; must "count(../dl:c) >= 1"; }
+        leaf xl-ref { type leafref { path "../dl:d"; } }
+    }
 }

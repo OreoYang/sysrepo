@@ -229,4 +229,46 @@ container pr {
         }
     }
 }
+container gp {
+    list g {
+        key name;
+        leaf name { type string; }
+        leaf b { type string; }
+        leaf d { type string; }
+        leaf s { type string; }
+        leaf peer { type string; }
+        list c { key name; leaf name { type string; } }
+        list lst { key name; leaf name { type string; } leaf tag { type string; } leaf kind { type identityref { base cap-base; } } }
+        leaf la1 { type string; must "not(../b)"; }
+        leaf la2 { type string; must "count(../c) >= 1"; }
+        leaf la3 { type string; must "string-length(../s) > 2"; }
+        leaf la4 { type string; must "string-length(.) > 2"; }
+        leaf la5 { type string; must "../d"; }
+        leaf la6 { type string; must ". = 'ok'"; }
+        leaf lr1 { type leafref { path "../d"; } }
+        leaf lr2 { type leafref { path "../lst/tag"; } }
+        leaf ls1 { type string; must "count(../lst[tag = 'x']) >= 1"; }
+        leaf wl1 { type string; when "../lst[tag = 'on']"; }
+        leaf wl2 { type string; when "not(../b)"; }
+        leaf bd { type string; must "count(../../g[name = current()/../peer]/lst) >= 1"; }
+        leaf bq { type string; must "not(boolean(../b)) and boolean(/dl:gp/dl:u[dl:name = current()]/dl:tag)"; }
+        leaf cq { type string; must "count(/dl:gp/dl:u[dl:tag = current()]) < 2"; }
+        leaf gk { type identityref { base cap-base; } }
+        leaf pp { type string; }
+        leaf pk { type string; must "derived-from-or-self(/dl:gp/dl:g[dl:name = current()]/dl:gk, 'dl:cap-sub') and /dl:gp/dl:g[dl:name = current()]/dl:d = ../d and (not(../pp) or (current() != ../pp))"; }
+        leaf pc { type string; must "derived-from-or-self(/dl:gp/dl:g[dl:name = current()]/dl:gk, 'dl:cap-sub') and not(/dl:gp/dl:uq[dl:name = current()])"; }
+        leaf ld { type string; must "derived-from-or-self(../lst[name = current()]/kind, 'dl:cap-sub')"; }
+    }
+    list u { key name; leaf name { type string; } leaf tag { type string; } leaf r { type leafref { path "../../u/tag"; } } }
+    list uq { key name; unique tag; leaf name { type string; } leaf tag { type string; } }
+    leaf wu { type string; when "/dl:gp/dl:u/dl:tag = 'on'"; }
+    leaf wb { type string; when "not(/dl:gp/dl:u[dl:name = 'z'])"; }
+}
+container gs {
+    presence "x";
+    list mcl { key name; leaf name { type string; } choice ch { mandatory true; case a { leaf ca { type string; } } case b { leaf cb { type string; } } } }
+    list mml { key name; leaf name { type string; } leaf mand { type string; mandatory true; } }
+    list mxl { key name; max-elements 2; leaf name { type string; } }
+    list mnl { key name; min-elements 2; leaf name { type string; } }
+}
 }

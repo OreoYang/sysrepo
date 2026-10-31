@@ -507,7 +507,7 @@ static const struct dl_case dl_cases[] = {
 
 static const char *const dl_roots[] = {
     "/dz:zt", "/dm:mtop", "/dl:top", "/dl:lone", "/dl:c-mn", "/dl:c-mt", "/dl:c-mp", "/dl:c-mc", "/dl:c-dc", "/dl:c-pc",
-    "/dl:c-np", "/dl:c-vk", "/dl:c-neg", "/dl:pr", NULL
+    "/dl:c-np", "/dl:c-vk", "/dl:c-neg", "/dl:pr", "/dl:gp", "/dl:gs", NULL
 };
 
 static void
@@ -895,6 +895,228 @@ test_product_shapes(void **state)
     dl_run((struct state *)*state, dl_prod_cases, sizeof dl_prod_cases / sizeof *dl_prod_cases);
 }
 
+/*
+ * Rule shapes the production schemas use that no case above rejects an edit through. The comment of each group
+ * says which actions it covers: adding the rule node, replacing its value, and adding, deleting or replacing a
+ * node the rule reads.
+ */
+#define GP_P "/dl:gp/"
+#define GP_T(x) DL_C("gp", x)
+#define GP_G(n, x) "<g><name>" n "</name>" x "</g>"
+#define GP_U(n, t) "<u><name>" n "</name><tag>" t "</tag></u>"
+#define GP_G1 GP_P "g[name='g1']/"
+#define GS_P "/dl:gs/"
+#define GS_T(x) DL_C("gs", x)
+static const struct dl_case dl_gp_cases[] = {
+    /* LOCAL, negating or counting */
+    {"gap: LOCAL not() must, added while the atom exists", GP_T(GP_G("g1", "<b>y</b>")), {GP_G1 "la1", "x"}, E_BAD},
+    {"gap: LOCAL not() must, added without the atom", GP_T(GP_G("g1", "<d>y</d>")), {GP_G1 "la1", "x"}, E_OK},
+    {"gap: LOCAL not() must, the atom appears", GP_T(GP_G("g1", "<la1>x</la1>")), {GP_G1 "b", "y"}, E_BAD},
+    {"gap: LOCAL not() must, an unrelated leaf appears", GP_T(GP_G("g1", "<la1>x</la1>")), {GP_G1 "d", "y"}, E_OK},
+    {"gap: LOCAL count() must, the last counted node is deleted",
+        GP_T(GP_G("g1", "<c><name>c1</name></c><la2>x</la2>")), {"-" GP_G1 "c[name='c1']"}, E_BAD},
+    {"gap: LOCAL count() must, one of two counted nodes is deleted",
+        GP_T(GP_G("g1", "<c><name>c1</name></c><c><name>c2</name></c><la2>x</la2>")), {"-" GP_G1 "c[name='c1']"}, E_OK},
+    {"gap: LOCAL count() must, added with nothing to count", GP_T(GP_G("g1", "")), {GP_G1 "la2", "x"}, E_BAD},
+    {"gap: LOCAL string-length() must, the atom shortened", GP_T(GP_G("g1", "<s>abc</s><la3>x</la3>")),
+        {GP_G1 "s", "x"}, E_BAD},
+    {"gap: LOCAL string-length() must, the atom lengthened", GP_T(GP_G("g1", "<s>abc</s><la3>x</la3>")),
+        {GP_G1 "s", "abcd"}, E_OK},
+    {"gap: LOCAL string-length() must, the atom deleted", GP_T(GP_G("g1", "<s>abc</s><la3>x</la3>")),
+        {"-" GP_G1 "s"}, E_BAD},
+    {"gap: LOCAL string-length() must, added next to a short atom", GP_T(GP_G("g1", "<s>a</s>")),
+        {GP_G1 "la3", "x"}, E_BAD},
+    {"gap: LOCAL string-length() must on the node itself, value shortened", GP_T(GP_G("g1", "<la4>abc</la4>")),
+        {GP_G1 "la4", "x"}, E_BAD},
+    {"gap: LOCAL string-length() must on the node itself, value lengthened", GP_T(GP_G("g1", "<la4>abc</la4>")),
+        {GP_G1 "la4", "abcd"}, E_OK},
+    /* LOCAL, positive */
+    {"gap: LOCAL existence must, the atom deleted", GP_T(GP_G("g1", "<b>y</b><d>y</d><la5>x</la5>")),
+        {"-" GP_G1 "d"}, E_BAD},
+    {"gap: LOCAL existence must, an unrelated leaf deleted", GP_T(GP_G("g1", "<b>y</b><d>y</d><la5>x</la5>")),
+        {"-" GP_G1 "b"}, E_OK},
+    {"gap: LOCAL equality must on the node itself, value replaced", GP_T(GP_G("g1", "<la6>ok</la6>")),
+        {GP_G1 "la6", "bad"}, E_BAD},
+    {"gap: LOCAL equality must on the node itself, another leaf added", GP_T(GP_G("g1", "<la6>ok</la6>")),
+        {GP_G1 "d", "y"}, E_OK},
+    /* leafref, LOCAL */
+    {"gap: LOCAL leafref, value replaced by a missing target", GP_T(GP_G("g1", "<d>x</d><lr1>x</lr1>")),
+        {GP_G1 "lr1", "y"}, E_BAD},
+    {"gap: LOCAL leafref, target value replaced", GP_T(GP_G("g1", "<d>x</d><lr1>x</lr1>")), {GP_G1 "d", "z"}, E_BAD},
+    {"gap: LOCAL leafref, target deleted", GP_T(GP_G("g1", "<d>x</d><lr1>x</lr1>")), {"-" GP_G1 "d"}, E_BAD},
+    {"gap: LOCAL leafref, target and referrer replaced together", GP_T(GP_G("g1", "<d>x</d><lr1>x</lr1>")),
+        {GP_G1 "d", "z", GP_G1 "lr1", "z"}, E_OK},
+    /* leafref, LIST-SCOPE */
+    {"gap: LIST-SCOPE leafref, added without a target",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>t1</tag></lst>")), {GP_G1 "lr2", "zz"}, E_BAD},
+    {"gap: LIST-SCOPE leafref, added with a target",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>t1</tag></lst>")), {GP_G1 "lr2", "t1"}, E_OK},
+    {"gap: LIST-SCOPE leafref, value replaced by a missing target",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>t1</tag></lst><lr2>t1</lr2>")), {GP_G1 "lr2", "zz"}, E_BAD},
+    {"gap: LIST-SCOPE leafref, target value replaced",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>t1</tag></lst><lr2>t1</lr2>")),
+        {GP_G1 "lst[name='l1']/tag", "t2"}, E_BAD},
+    /* must counting a nested list through a predicate, LIST-SCOPE */
+    {"gap: LIST-SCOPE count() with a predicate, value of the counted node replaced",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>x</tag></lst><ls1>y</ls1>")), {GP_G1 "lst[name='l1']/tag", "y"}, E_BAD},
+    {"gap: LIST-SCOPE count() with a predicate, counted node deleted",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>x</tag></lst><ls1>y</ls1>")), {"-" GP_G1 "lst[name='l1']"}, E_BAD},
+    {"gap: LIST-SCOPE count() with a predicate, added with nothing counted", GP_T(GP_G("g1", "")),
+        {GP_G1 "ls1", "y"}, E_BAD},
+    {"gap: LIST-SCOPE count() with a predicate, another counted node added",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>x</tag></lst><ls1>y</ls1>")), {GP_G1 "lst[name='l2']/tag", "x"}, E_OK},
+    /* when */
+    {"gap: LIST-SCOPE when, node added while it is false", GP_T(GP_G("g1", "<lst><name>l1</name><tag>off</tag></lst>")),
+        {GP_G1 "wl1", "y"}, E_BAD},
+    {"gap: LIST-SCOPE when, node added while it is true", GP_T(GP_G("g1", "<lst><name>l1</name><tag>on</tag></lst>")),
+        {GP_G1 "wl1", "y"}, E_OK},
+    {"gap: LIST-SCOPE when, CASCADE the gate turns false and the node is dropped",
+        GP_T(GP_G("g1", "<lst><name>l1</name><tag>on</tag></lst><wl1>y</wl1>")), {GP_G1 "lst[name='l1']/tag", "off"}, E_OK},
+    {"gap: LOCAL not() when, node added while it is false", GP_T(GP_G("g1", "<b>y</b>")), {GP_G1 "wl2", "y"}, E_BAD},
+    {"gap: LOCAL not() when, CASCADE the atom appears and the node is dropped", GP_T(GP_G("g1", "<wl2>y</wl2>")),
+        {GP_G1 "b", "y"}, E_OK},
+    /* BOUNDED, relative path to another instance */
+    {"gap: BOUNDED count() through the peer instance, the counted node deleted",
+        GP_T(GP_G("g1", "<peer>g2</peer><bd>x</bd>") GP_G("g2", "<lst><name>l1</name></lst>")),
+        {"-" GP_P "g[name='g2']/lst[name='l1']"}, E_BAD},
+    {"gap: BOUNDED count() through the peer instance, another counted node is left",
+        GP_T(GP_G("g1", "<peer>g2</peer><bd>x</bd>") GP_G("g2", "<lst><name>l1</name></lst><lst><name>l2</name></lst>")),
+        {"-" GP_P "g[name='g2']/lst[name='l1']"}, E_OK},
+    {"gap: BOUNDED count() through the peer instance, added with nothing to count",
+        GP_T(GP_G("g1", "<peer>g2</peer>") GP_G("g2", "")), {GP_G1 "bd", "x"}, E_BAD},
+    {"gap: BOUNDED count() through the peer instance, the peer replaced by an empty one",
+        GP_T(GP_G("g1", "<peer>g2</peer><bd>x</bd>") GP_G("g2", "<lst><name>l1</name></lst>") GP_G("g3", "")),
+        {GP_G1 "peer", "g3"}, E_BAD},
+    /* UNBOUNDED, relative leafref over a whole list */
+    {"gap: UNBOUNDED relative leafref, target value replaced",
+        GP_T(GP_U("u1", "t1") "<u><name>u2</name><tag>t2</tag><r>t1</r></u>"), {GP_P "u[name='u1']/tag", "t9"}, E_BAD},
+    {"gap: UNBOUNDED relative leafref, value replaced by a missing target",
+        GP_T(GP_U("u1", "t1") "<u><name>u2</name><tag>t2</tag><r>t1</r></u>"), {GP_P "u[name='u2']/r", "zz"}, E_BAD},
+    {"gap: UNBOUNDED relative leafref, instance added without a target", GP_T(GP_U("u1", "t1")),
+        {GP_P "u[name='u3']/r", "zz"}, E_BAD},
+    {"gap: UNBOUNDED relative leafref, instance added with a target", GP_T(GP_U("u1", "t1")),
+        {GP_P "u[name='u3']/r", "t1"}, E_OK},
+    /* when over an absolute path */
+    {"gap: UNBOUNDED when over an absolute path, node added while it is false", GP_T(GP_U("u1", "off")),
+        {GP_P "wu", "x"}, E_BAD},
+    {"gap: UNBOUNDED when over an absolute path, node added while it is true", GP_T(GP_U("u1", "on")),
+        {GP_P "wu", "x"}, E_OK},
+    {"gap: UNBOUNDED when over an absolute path, CASCADE the gate turns false",
+        GP_T(GP_U("u1", "on") "<wu>x</wu>"), {GP_P "u[name='u1']/tag", "off"}, E_OK},
+    {"gap: BOUNDED not() when over an absolute path, node added while it is false", GP_T(GP_U("z", "t")),
+        {GP_P "wb", "x"}, E_BAD},
+    {"gap: BOUNDED not() when over an absolute path, node added while it is true", GP_T(GP_U("y", "t")),
+        {GP_P "wb", "x"}, E_OK},
+    /* BOUNDED, absolute path selected by the value of the node */
+    {"gap: BOUNDED boolean() and not(), added with no target", GP_T(GP_G("g1", "") GP_U("u1", "t1")),
+        {GP_G1 "bq", "nope"}, E_BAD},
+    {"gap: BOUNDED boolean() and not(), added with a target", GP_T(GP_G("g1", "") GP_U("u1", "t1")),
+        {GP_G1 "bq", "u1"}, E_OK},
+    {"gap: BOUNDED boolean() and not(), the optional leaf appears", GP_T(GP_G("g1", "<bq>u1</bq>") GP_U("u1", "t1")),
+        {GP_G1 "b", "y"}, E_BAD},
+    {"gap: BOUNDED value-keyed count(), a second node with the same value appears",
+        GP_T(GP_U("u1", "t") GP_G("g1", "<cq>t</cq>")), {GP_P "u[name='u2']/tag", "t"}, E_BAD},
+    {"gap: BOUNDED value-keyed count(), a node with another value appears",
+        GP_T(GP_U("u1", "t") GP_G("g1", "<cq>t</cq>")), {GP_P "u[name='u2']/tag", "o"}, E_OK},
+    /* LIST-SCOPE derived-from() through a key chosen by the node */
+    {"gap: LIST-SCOPE derived-from() must, the identity of the chosen instance replaced",
+        GP_T(GP_G("g1", "<lst><name>l1</name><kind xmlns:dl=\"urn:tests:dl\">dl:cap-sub</kind></lst><ld>l1</ld>")),
+        {GP_G1 "lst[name='l1']/kind", "dl:cap-other"}, E_BAD},
+    {"gap: LIST-SCOPE derived-from() must, the identity of the chosen instance deleted",
+        GP_T(GP_G("g1", "<lst><name>l1</name><kind xmlns:dl=\"urn:tests:dl\">dl:cap-sub</kind></lst><ld>l1</ld>")),
+        {"-" GP_G1 "lst[name='l1']/kind"}, E_BAD},
+    {"gap: LIST-SCOPE derived-from() must, the node moves to an instance of another identity",
+        GP_T(GP_G("g1", "<lst><name>l1</name><kind xmlns:dl=\"urn:tests:dl\">dl:cap-sub</kind></lst><lst><name>l2</name>"
+        "<kind xmlns:dl=\"urn:tests:dl\">dl:cap-other</kind></lst><ld>l1</ld>")), {GP_G1 "ld", "l2"}, E_BAD},
+    /* rules of another module, reading dl */
+    {"gap: cross-module when, node added while it is false", GP_T(GP_G("g1", "")), {GP_G1 "dm:xw-when", "y"}, E_BAD},
+    {"gap: cross-module when, node added while it is true", GP_T(GP_G("g1", "<b>y</b>")), {GP_G1 "dm:xw-when", "y"}, E_OK},
+    {"gap: cross-module when, CASCADE the atom is deleted and the node is dropped",
+        GP_T(GP_G("g1", "<b>y</b><xw-when xmlns=\"urn:tests:dm\">y</xw-when>")), {"-" GP_G1 "b"}, E_OK},
+    {"gap: cross-module not() when, node added while it is false", GP_T(GP_G("g1", "<b>y</b>")),
+        {GP_G1 "dm:xn-when", "y"}, E_BAD},
+    {"gap: cross-module not() when, CASCADE the atom appears and the node is dropped",
+        GP_T(GP_G("g1", "<xn-when xmlns=\"urn:tests:dm\">y</xn-when>")), {GP_G1 "b", "y"}, E_OK},
+    {"gap: cross-module not() must, the atom appears", GP_T(GP_G("g1", "")), {GP_G1 "dm:xm-must", "y", GP_G1 "b", "y"}, E_BAD},
+    {"gap: cross-module not() must, added while the atom exists", GP_T(GP_G("g1", "<b>y</b>")),
+        {GP_G1 "dm:xm-must", "y"}, E_BAD},
+    {"gap: cross-module count() must, the last counted node deleted",
+        GP_T(GP_G("g1", "<c><name>c1</name></c><xc-must xmlns=\"urn:tests:dm\">y</xc-must>")),
+        {"-" GP_G1 "c[name='c1']"}, E_BAD},
+    {"gap: cross-module leafref, added without a target", GP_T(GP_G("g1", "")), {GP_G1 "dm:xl-ref", "x"}, E_BAD},
+    {"gap: cross-module leafref, added with a target", GP_T(GP_G("g1", "<d>x</d>")), {GP_G1 "dm:xl-ref", "x"}, E_OK},
+    /* value read through a key chosen by the node, with a negation */
+    {"gap: BOUNDED derived-from() with not(), added for a missing instance", GP_T(GP_G("g1", "") GP_G("g2", "")),
+        {GP_G1 "pc", "g3"}, E_BAD},
+    {"gap: BOUNDED derived-from() with not(), added for a fitting instance",
+        GP_T(GP_G("g1", "") GP_G("g2", "<gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")), {GP_G1 "pc", "g2"}, E_OK},
+    {"gap: BOUNDED derived-from() with not(), the identity of the chosen instance replaced",
+        GP_T(GP_G("g1", "<pc>g2</pc>") GP_G("g2", "<gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_P "g[name='g2']/gk", "dl:cap-other"}, E_BAD},
+    {"gap: BOUNDED derived-from() with not(), the chosen instance appears in the not() list",
+        GP_T(GP_G("g1", "<pc>g2</pc>") GP_G("g2", "<gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_P "uq[name='g2']/tag", "1"}, E_BAD},
+    /* the shape of the preferred-channel-pair rule: a key chosen by the node, a comparison with a sibling and a negation that stays in the instance */
+    {"gap: BOUNDED chosen-instance comparison, the compared value of the chosen instance replaced",
+        GP_T(GP_G("g1", "<d>x</d><pk>g2</pk>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_P "g[name='g2']/d", "y"}, E_BAD},
+    {"gap: BOUNDED chosen-instance comparison, the identity of the chosen instance replaced",
+        GP_T(GP_G("g1", "<d>x</d><pk>g2</pk>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_P "g[name='g2']/gk", "dl:cap-other"}, E_BAD},
+    {"gap: BOUNDED chosen-instance comparison, the negated sibling gets the node's value",
+        GP_T(GP_G("g1", "<d>x</d><pk>g2</pk>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_G1 "pp", "g2"}, E_BAD},
+    {"gap: BOUNDED chosen-instance comparison, the negated sibling gets another value",
+        GP_T(GP_G("g1", "<d>x</d><pk>g2</pk>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_G1 "pp", "g3"}, E_OK},
+    {"gap: BOUNDED chosen-instance comparison, added while the compared values differ",
+        GP_T(GP_G("g1", "<d>z</d>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_G1 "pk", "g2"}, E_BAD},
+    {"gap: BOUNDED chosen-instance comparison, added while the compared values match",
+        GP_T(GP_G("g1", "<d>x</d>") GP_G("g2", "<d>x</d><gk xmlns:dl=\"urn:tests:dl\">dl:cap-sub</gk>")),
+        {GP_G1 "pk", "g2"}, E_OK},
+    /* structure: mandatory choice and leaf, max-elements, min-elements */
+    {"gap: mandatory choice, an instance added without a case", GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl>"),
+        {GS_P "mcl[name='m1']", NULL}, E_BAD},
+    {"gap: mandatory choice, an instance added with a case", GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl>"),
+        {GS_P "mcl[name='m1']/ca", "x"}, E_OK},
+    {"gap: mandatory choice, the only case deleted",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl><mcl><name>m1</name><ca>x</ca></mcl>"),
+        {"-" GS_P "mcl[name='m1']/ca"}, E_BAD},
+    {"gap: mandatory choice, the case switched in one edit",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl><mcl><name>m1</name><ca>x</ca></mcl>"),
+        {"-" GS_P "mcl[name='m1']/ca", NULL, GS_P "mcl[name='m1']/cb", "y"}, E_OK},
+    {"gap: mandatory leaf, an instance added without it", GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl>"),
+        {GS_P "mml[name='m1']", NULL}, E_BAD},
+    {"gap: mandatory leaf, deleted",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl><mml><name>m1</name><mand>x</mand></mml>"),
+        {"-" GS_P "mml[name='m1']/mand"}, E_BAD},
+    {"gap: max-elements, a third instance added",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl><mxl><name>x1</name></mxl><mxl><name>x2</name></mxl>"),
+        {GS_P "mxl[name='x3']", NULL}, E_BAD},
+    {"gap: max-elements, one instance replaced by another",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl><mxl><name>x1</name></mxl><mxl><name>x2</name></mxl>"),
+        {"-" GS_P "mxl[name='x1']", NULL, GS_P "mxl[name='x3']", NULL}, E_OK},
+    {"gap: min-elements, an instance deleted",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl>"), {"-" GS_P "mnl[name='n1']"}, E_BAD},
+    {"gap: min-elements, an instance replaced by another",
+        GS_T("<mnl><name>n1</name></mnl><mnl><name>n2</name></mnl>"),
+        {"-" GS_P "mnl[name='n1']", NULL, GS_P "mnl[name='n3']", NULL}, E_OK},
+    /* unique */
+    {"gap: unique, the value replaced by a duplicate",
+        GP_T("<uq><name>a</name><tag>1</tag></uq><uq><name>b</name><tag>2</tag></uq>"), {GP_P "uq[name='b']/tag", "1"}, E_BAD},
+    {"gap: unique, the value replaced by a new one",
+        GP_T("<uq><name>a</name><tag>1</tag></uq><uq><name>b</name><tag>2</tag></uq>"), {GP_P "uq[name='b']/tag", "3"}, E_OK},
+    {"gap: unique, an instance added with a duplicate", GP_T("<uq><name>a</name><tag>1</tag></uq>"),
+        {GP_P "uq[name='b']/tag", "1"}, E_BAD},
+};
+
+static void
+test_gap_shapes(void **state)
+{
+    dl_run((struct state *)*state, dl_gp_cases, sizeof dl_gp_cases / sizeof *dl_gp_cases);
+}
+
 static void
 test_delete_yang_probe(void **state)
 {
@@ -923,6 +1145,7 @@ main(void)
         cmocka_unit_test_teardown(test_add_relative_readers, clear_data),
         cmocka_unit_test_teardown(test_modify_rules, clear_data),
         cmocka_unit_test_teardown(test_product_shapes, clear_data),
+        cmocka_unit_test_teardown(test_gap_shapes, clear_data),
     };
 
     setenv("CMOCKA_TEST_ABORT", "1", 1);
