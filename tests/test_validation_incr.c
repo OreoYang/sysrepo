@@ -688,6 +688,22 @@ static const struct dl_case dl_add_cases[] = {
         "<un><name>c</name></un>"), {"/dl:c-neg/un[name='d']", NULL}, E_BAD},
     {"add: structure, unique value twice", DL_C("c-neg", "<un><name>a</name><u>1</u></un>"),
         {"/dl:c-neg/un[name='b']/u", "1"}, E_BAD},
+    {"add: structure, max-elements of a list, at the limit", DL_C("c-neg", "<un><name>a</name></un><un><name>b</name></un>"),
+        {"/dl:c-neg/un[name='c']", NULL}, E_OK},
+    {"add: structure, max-elements of a leaf-list", DL_C("c-neg", "<mx>a</mx><mx>b</mx><mx>c</mx>"),
+        {"/dl:c-neg/mx[.='d']", NULL}, E_BAD},
+    {"add: structure, unique value is distinct", DL_C("c-neg", "<un><name>a</name><u>1</u></un>"),
+        {"/dl:c-neg/un[name='b']/u", "2"}, E_OK},
+    {"add: structure, mandatory leaf missing", DL_T(DL_I("i1", "a")), {"/dl:c-mp/l[name='a']", NULL}, E_BAD},
+    {"add: structure, mandatory leaf present", DL_T(DL_I("i1", "a")), {"/dl:c-mp/m", "x", "/dl:c-mp/l[name='a']", NULL}, E_OK},
+    {"add: structure, mandatory choice without a case", DL_T(DL_I("i1", "a")), {"/dl:c-mc/keep", "x"}, E_BAD},
+    {"add: structure, mandatory choice with a case", DL_T(DL_I("i1", "a")), {"/dl:c-mc/lb", "v"}, E_OK},
+    {"add: structure, min-elements too few", DL_T(DL_I("i1", "a")), {"/dl:c-mn/mn[name='a']", NULL}, E_BAD},
+    {"add: structure, min-elements enough", DL_T(DL_I("i1", "a")),
+        {"/dl:c-mn/mn[name='a']", NULL, "/dl:c-mn/mn[name='b']", NULL}, E_OK},
+    {"add: structure, min-elements of a leaf-list", DL_T(DL_I("i1", "a")), {"/dl:c-mt/keep", "x"}, E_BAD},
+    {"add: structure, default case gives way to the added one", DL_C("c-dc", "<keep>k</keep>"),
+        {"/dl:c-dc/rule[id='1']", NULL}, E_OK},
     /* CASCADE */
     {"add: CASCADE the when turns false, the node goes", DL_T(DL_G1 "<wn>y</wn></grp>"
         "<grp><name>g2</name><mem><name>a</name></mem></grp>"), {DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_OK},
@@ -744,6 +760,19 @@ static const struct dl_case dl_modify_cases[] = {
         DL_T(DL_R("r", "<sw>on</sw><dep>x</dep><m-dep>y</m-dep>")), {DL_P "r[name='r']/sw", "off"}, E_BAD},
     {"modify: CASCADE the when turns false, the node is dropped, nothing reads it",
         DL_T(DL_R("r", "<sw>on</sw><dep>x</dep>")), {DL_P "r[name='r']/sw", "off"}, E_OK},
+    /* STRUCTURE */
+    {"modify: structure, unique value becomes a duplicate",
+        DL_C("c-neg", "<un><name>a</name><u>1</u></un><un><name>b</name><u>2</u></un>"),
+        {"/dl:c-neg/un[name='b']/u", "1"}, E_BAD},
+    {"modify: structure, unique value becomes another distinct one",
+        DL_C("c-neg", "<un><name>a</name><u>1</u></un><un><name>b</name><u>2</u></un>"),
+        {"/dl:c-neg/un[name='b']/u", "3"}, E_OK},
+    {"modify: structure, choice case switched, the old case is replaced",
+        DL_C("c-mc", "<la><name>a</name></la>"), {"/dl:c-mc/lb", "v"}, E_OK},
+    {"modify: structure, choice case switched in a default choice",
+        DL_C("c-dc", "<keep>k</keep><auto>x</auto>"), {"/dl:c-dc/rule[id='1']", NULL}, E_OK},
+    {"modify: structure, mandatory leaf value changes",
+        DL_C("c-mp", "<m>x</m>"), {"/dl:c-mp/m", "y"}, E_OK},
 };
 
 static void
