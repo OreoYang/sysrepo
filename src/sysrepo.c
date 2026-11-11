@@ -117,10 +117,15 @@ sr_conn_new(const sr_conn_options_t opts, sr_conn_ctx_t **conn_p)
     if ((err_info = sr_rwlock_init(&conn->oper_cache_lock, 0))) {
         goto error10;
     }
+    if ((err_info = sr_mutex_init(&conn->val_full_lock, 0))) {
+        goto error11;
+    }
 
     *conn_p = conn;
     return NULL;
 
+error11:
+    sr_rwlock_destroy(&conn->oper_cache_lock);
 error10:
     sr_ntf_handle_free(conn->ntf_handles, conn->ntf_handle_count);
 error9:
@@ -192,6 +197,10 @@ sr_conn_free(sr_conn_ctx_t *conn)
     sr_rwlock_destroy(&conn->run_cache_lock);
     sr_ntf_handle_free(conn->ntf_handles, conn->ntf_handle_count);
     sr_rwlock_destroy(&conn->oper_cache_lock);
+    for (i = 0; i < SR_DS_READ_COUNT; ++i) {
+        ly_set_erase(&conn->val_full[i], NULL);
+    }
+    pthread_mutex_destroy(&conn->val_full_lock);
 
     free(conn);
 }
@@ -4380,7 +4389,8 @@ sr_changes_notify_store(struct sr_mod_info_s *mod_info, sr_session_ctx_t *sessio
         err_count = *err_info2 ? (*err_info2)->err_count : 0;
 
         /* the stored data were valid and the diff describes every change made to them since, incremental validation
-         * relies on both; running copied from startup on boot (sr_shmmod_reboot_init()) was never validated */
+         * relies on both; stored data this connection has not validated yet, such as running copied from startup on
+         * boot (sr_shmmod_reboot_init()), are validated in full first */
         if ((err_info = sr_modinfo_validate(mod_info, MOD_INFO_CHANGED | MOD_INFO_INV_DEP, 1, 1, err_info2))) {
             goto cleanup;
         } else if (*err_info2 && ((*err_info2)->err_count > err_count)) {
@@ -4469,6 +4479,7 @@ store:
     if ((err_info = sr_modinfo_data_store(mod_info, session, shmmod_session_del, 1))) {
         goto cleanup;
     }
+    sr_modinfo_val_full_stored(mod_info);
 
     /* MODULES READ LOCK (downgrade) */
     if ((err_info = sr_shmmod_modinfo_wrlock_downgrade(mod_info, sid, timeout_ms))) {

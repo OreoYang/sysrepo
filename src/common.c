@@ -3380,6 +3380,8 @@ sr_conn_ctx_switch(sr_conn_ctx_t *conn, struct ly_ctx **new_ctx, struct ly_ctx *
 {
     sr_error_info_t *err_info = NULL;
     struct lyd_node *new_ext_data = NULL;
+    uint32_t i;
+    int locked;
 
     assert(new_ctx);
 
@@ -3395,6 +3397,20 @@ sr_conn_ctx_switch(sr_conn_ctx_t *conn, struct ly_ctx **new_ctx, struct ly_ctx *
     sr_conn_ext_data_replace(conn, new_ext_data);
     sr_conn_run_cache_flush(conn);
     sr_conn_oper_cache_flush(conn);
+
+    /* the modules belong to the old context, and the stored data must be validated in full again; no validation runs
+     * while the context is being switched, so the sets are erased even if the lock cannot be taken */
+    locked = 1;
+    if ((err_info = sr_mlock(&conn->val_full_lock, -1, __func__, NULL, NULL))) {
+        sr_errinfo_free(&err_info);
+        locked = 0;
+    }
+    for (i = 0; i < SR_DS_READ_COUNT; ++i) {
+        ly_set_erase(&conn->val_full[i], NULL);
+    }
+    if (locked) {
+        sr_munlock(&conn->val_full_lock);
+    }
 
     /* update content ID */
     conn->content_id = SR_CONN_MAIN_SHM(conn)->content_id;

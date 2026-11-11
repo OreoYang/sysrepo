@@ -1,0 +1,19 @@
+module incr-u {
+    namespace urn:tests:incr-u;
+    prefix iu;
+    yang-version 1.1;
+
+    revision 2026-02-01;
+    revision 2026-01-01;
+
+    container u {
+        list item {
+            key name;
+            leaf name { type string; }
+            leaf val {
+                type string;
+                must "count(../../item[val = current()]) = 1";
+            }
+        }
+    }
+}

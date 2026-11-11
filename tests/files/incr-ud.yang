@@ -1,0 +1,13 @@
+module incr-ud {
+    namespace urn:tests:incr-ud;
+    prefix iud;
+    yang-version 1.1;
+
+    import incr-u { prefix iu; }
+
+    deviation "/iu:u/iu:item/iu:val" {
+        deviate add {
+            must "string-length(.) <= 3";
+        }
+    }
+}

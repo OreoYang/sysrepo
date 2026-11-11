@@ -27,6 +27,7 @@
 #include <cmocka.h>
 #include <libyang/libyang.h>
 
+#include "config.h"
 #include "sysrepo.h"
 #include "tests/tcommon.h"
 
@@ -117,6 +118,27 @@ exists(struct state *st, const char *path)
     sr_session_stop(sess);
 
     return ret == SR_ERR_OK;
+}
+
+/**
+ * @brief Print everything stored in datastore @p ds, the pending edit is not looked at.
+ */
+static char *
+stored_xml(struct state *st, sr_datastore_t ds)
+{
+    sr_session_ctx_t *sess;
+    sr_data_t *data = NULL;
+    char *str = NULL;
+
+    assert_int_equal(SR_ERR_OK, sr_session_start(st->conn, ds, &sess));
+    assert_int_equal(SR_ERR_OK, sr_get_data(sess, "/*", 0, 0, 0, &data));
+    if (data) {
+        assert_int_equal(LY_SUCCESS, lyd_print_mem(&str, data->tree, LYD_XML, LYD_PRINT_WITHSIBLINGS));
+        sr_release_data(data);
+    }
+    sr_session_stop(sess);
+
+    return str ? str : strdup("");
 }
 
 /**
@@ -545,6 +567,7 @@ dl_run(struct state *st, const struct dl_case *cases, uint32_t count)
 {
     const struct dl_case *c;
     uint32_t i, e;
+    char *stored, *now;
     int rc;
 
     for (i = 0; i < count; ++i) {
@@ -557,6 +580,7 @@ dl_run(struct state *st, const struct dl_case *cases, uint32_t count)
 
         dl_clear(st);
         dl_load(st, c->xml);
+        stored = stored_xml(st, SR_DS_RUNNING);
 
         for (e = 0; c->edits[e]; e += 2) {
             if (c->edits[e][0] == '-') {
@@ -576,11 +600,12 @@ dl_run(struct state *st, const struct dl_case *cases, uint32_t count)
         } else {
             assert_int_equal(SR_ERR_VALIDATION_FAILED, rc);
             assert_int_equal(SR_ERR_OK, sr_discard_changes(st->sess));
-            /* the first deleted path is still there */
-            if (c->edits[0][0] == '-') {
-                assert_true(exists(st, c->edits[0] + 1));
-            }
+            /* nothing of the rejected edit was stored */
+            now = stored_xml(st, SR_DS_RUNNING);
+            assert_string_equal(stored, now);
+            free(now);
         }
+        free(stored);
     }
     dl_clear(st);
 }
@@ -785,6 +810,70 @@ static void
 test_modify_rules(void **state)
 {
     dl_run((struct state *)*state, dl_modify_cases, sizeof dl_modify_cases / sizeof *dl_modify_cases);
+}
+
+/*
+ * A key cannot be modified, so a key change is a delete of the old instance and a create of the new one in the same
+ * edit. Each reader of the old key either is left behind or follows in the same edit.
+ */
+static const struct dl_case dl_key_cases[] = {
+    {"key change of a leafref target, the reader is left behind", DL_T(DL_I("i1", "a") DL_I("i2", "b")
+        DL_R("r", "<lref>i1</lref>")), {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a"}, E_BAD},
+    {"key change of a leafref target, the reader follows", DL_T(DL_I("i1", "a") DL_I("i2", "b")
+        DL_R("r", "<lref>i1</lref>")), {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a",
+        DL_P "r[name='r']/lref", "i9"}, E_OK},
+    {"key change of an instance no rule reads", DL_T(DL_I("i1", "a") DL_I("i2", "b") DL_R("r", "<lref>i1</lref>")),
+        {"-" DL_P "item[name='i2']", NULL, DL_P "item[name='i9']/val", "b"}, E_OK},
+    {"key change of a leaf-list leafref target", DL_T("<tag>t1</tag><tag>t2</tag>" DL_R("r", "<tref>t1</tref>")),
+        {"-" DL_P "tag[.='t1']", NULL, DL_P "tag[.='t9']", NULL}, E_BAD},
+    {"key change of a list keyed by a leafref, to an existing target", DL_T(DL_I("i1", "a") DL_I("i2", "b")
+        "<kr><k>i1</k></kr>"), {"-" DL_P "kr[k='i1']", NULL, DL_P "kr[k='i2']", NULL}, E_OK},
+    {"key change of a list keyed by a leafref, to a missing target", DL_T(DL_I("i1", "a") DL_I("i2", "b")
+        "<kr><k>i1</k></kr>"), {"-" DL_P "kr[k='i1']", NULL, DL_P "kr[k='i7']", NULL}, E_BAD},
+    {"key change of the target of a leafref key", DL_T(DL_I("i1", "a") "<kr><k>i1</k></kr>"),
+        {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a"}, E_BAD},
+    {"key change keeps a unique value", DL_C("c-neg", "<un><name>a</name><u>u1</u></un><un><name>b</name><u>u2</u></un>"),
+        {"-/dl:c-neg/un[name='a']", NULL, "/dl:c-neg/un[name='c']/u", "u1"}, E_OK},
+    {"key change collides on a unique value", DL_C("c-neg", "<un><name>a</name><u>u1</u></un><un><name>b</name><u>u2</u></un>"),
+        {"-/dl:c-neg/un[name='a']", NULL, "/dl:c-neg/un[name='c']/u", "u2"}, E_BAD},
+    {"key change keeps a value-keyed count", DL_C("c-vk", "<vk><name>v1</name><grp>g1</grp></vk>"
+        "<vk><name>v2</name><grp>g1</grp></vk>"), {"-/dl:c-vk/vk[name='v1']", NULL, "/dl:c-vk/vk[name='v9']/grp", "g1"}, E_OK},
+    {"key change moves an instance to another value bucket", DL_C("c-vk", "<vk><name>v1</name><grp>g1</grp></vk>"
+        "<vk><name>v2</name><grp>g1</grp></vk><vk><name>v3</name><grp>g2</grp></vk><vk><name>v4</name><grp>g2</grp></vk>"),
+        {"-/dl:c-vk/vk[name='v1']", NULL, "/dl:c-vk/vk[name='v9']/grp", "g2"}, E_BAD},
+    {"key change of a must target picked by a key predicate", DL_T("<tpl><name>t1</name><comp><name>c1</name>"
+        "<cls>ok</cls></comp><ifc><name>i1</name><hw>c1</hw></ifc></tpl>"), {"-" DL_P "tpl[name='t1']/comp[name='c1']", NULL,
+        DL_P "tpl[name='t1']/comp[name='c9']/cls", "ok"}, E_BAD},
+    {"key change of a must target picked by a key predicate, the reader follows", DL_T("<tpl><name>t1</name><comp>"
+        "<name>c1</name><cls>ok</cls></comp><ifc><name>i1</name><hw>c1</hw></ifc></tpl>"),
+        {"-" DL_P "tpl[name='t1']/comp[name='c1']", NULL, DL_P "tpl[name='t1']/comp[name='c9']/cls", "ok",
+        DL_P "tpl[name='t1']/ifc[name='i1']/hw", "c9"}, E_OK},
+    {"key change of the instance a when reads", DL_T(DL_GATE DL_R("r", "<w-on>y</w-on>")),
+        {"-" DL_P "item[name='gate']", NULL, DL_P "item[name='gat2']", NULL}, E_OK},
+    {"key change of the instance a when reads, a leafref needs the guarded node", DL_T(DL_GATE DL_R("r", "<w-on>y</w-on>")
+        "<wr><name>w1</name><wref>y</wref></wr>"), {"-" DL_P "item[name='gate']", NULL, DL_P "item[name='gat2']", NULL}, E_BAD},
+    {"key change inside a nested list, a not() rule now matches", DL_T(DL_G1 "<nx>y</nx></grp>"
+        "<grp><name>g2</name><mem><name>m1</name></mem></grp>"), {"-" DL_P "grp[name='g2']/mem[name='m1']", NULL,
+        DL_P "grp[name='g2']/mem[name='w1']", NULL}, E_BAD},
+    {"key change inside a nested list, the not() rule still holds", DL_T(DL_G1 "<nx>y</nx></grp>"
+        "<grp><name>g2</name><mem><name>m1</name></mem></grp>"), {"-" DL_P "grp[name='g2']/mem[name='m1']", NULL,
+        DL_P "grp[name='g2']/mem[name='w2']", NULL}, E_OK},
+    {"key change of the list a rule points at by value", DL_T(DL_G1 "<nx>y</nx></grp>"
+        "<grp><name>g2</name><mem><name>m1</name></mem></grp>"), {"-" DL_P "grp[name='g2']", NULL,
+        DL_P "grp[name='g3']/mem[name='w1']", NULL}, E_OK},
+    {"key change of the list a rule points at by value, the pointer follows", DL_T(DL_G1 "<nx>y</nx></grp>"
+        "<grp><name>g2</name><mem><name>m1</name></mem></grp>"), {"-" DL_P "grp[name='g2']", NULL,
+        DL_P "grp[name='g3']/mem[name='w1']", NULL, DL_P "grp[name='g1']/other", "g3"}, E_BAD},
+    {"key change read by another module", DL_T(DL_I("i1", "a") DL_I("i2", "b")) DM_M("<iref>i1</iref>"),
+        {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a"}, E_BAD},
+    {"key change read by another module, the reader follows", DL_T(DL_I("i1", "a") DL_I("i2", "b")) DM_M("<iref>i1</iref>"),
+        {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a", "/dm:mtop/mr[name='m1']/iref", "i9"}, E_OK},
+};
+
+static void
+test_key_change(void **state)
+{
+    dl_run((struct state *)*state, dl_key_cases, sizeof dl_key_cases / sizeof *dl_key_cases);
 }
 
 /*
@@ -1158,6 +1247,264 @@ test_delete_ancestor_reader(void **state)
     dl_run((struct state *)*state, dl_ancestor_cases, sizeof dl_ancestor_cases / sizeof *dl_ancestor_cases);
 }
 
+static void
+apply_edits(sr_session_ctx_t *sess, const char *const *edits)
+{
+    uint32_t e;
+
+    for (e = 0; edits[e]; e += 2) {
+        if (edits[e][0] == '-') {
+            assert_int_equal(SR_ERR_OK, sr_delete_item(sess, edits[e] + 1, 0));
+        } else {
+            assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, edits[e], edits[e + 1], NULL, 0));
+        }
+    }
+}
+
+static uint64_t
+incr_calls(void)
+{
+    uint64_t calls = 0;
+
+    lyd_validate_incr_stats(NULL, &calls, NULL);
+    return calls;
+}
+
+static int
+count_change_cb(sr_session_ctx_t *session, uint32_t sub_id, const char *module_name, const char *xpath,
+        sr_event_t event, uint32_t operation_id, void *private_data)
+{
+    (void)session;
+    (void)sub_id;
+    (void)module_name;
+    (void)xpath;
+    (void)operation_id;
+
+    if (event == SR_EV_CHANGE) {
+        __atomic_add_fetch((uint32_t *)private_data, 1, __ATOMIC_SEQ_CST);
+    }
+    return SR_ERR_OK;
+}
+
+/*
+ * A rejected edit leaves the datastore as it was and no subscriber hears of it, whichever check rejects it and
+ * whether a valid change of the same or another module goes with it.
+ */
+#define RB_XML DL_T(DL_I("i1", "a") DL_I("i2", "b") DL_R("r", "<lref>i1</lref>")) \
+        DL_C("c-mn", "<mn><name>m1</name></mn><mn><name>m2</name></mn>") \
+        DL_C("c-neg", "<un><name>a</name><u>u1</u></un><un><name>b</name><u>u2</u></un>") DM_M("<iref>i2</iref>")
+static const struct dl_case rb_cases[] = {
+    {"rollback: a leafref target deleted", NULL, {"-" DL_P "item[name='i1']"}, E_BAD},
+    {"rollback: below min-elements", NULL, {"-/dl:c-mn/mn[name='m1']"}, E_BAD},
+    {"rollback: a unique value collides", NULL, {"/dl:c-neg/un[name='b']/u", "u1"}, E_BAD},
+    {"rollback: a valid change goes with a rejected one", NULL,
+        {DL_P "item[name='i3']/val", "c", "-" DL_P "item[name='i1']", NULL}, E_BAD},
+    {"rollback: another module reads the deleted node", NULL, {"-" DL_P "item[name='i2']"}, E_BAD},
+    {"rollback: a valid change of another module goes with a rejected one", NULL,
+        {"/dm:mtop/mr[name='m2']/iref", "i1", "-" DL_P "item[name='i2']", NULL}, E_BAD},
+    {"rollback: a key change leaves a reader behind", NULL,
+        {"-" DL_P "item[name='i1']", NULL, DL_P "item[name='i9']/val", "a"}, E_BAD},
+};
+
+static void
+test_rollback(void **state)
+{
+    struct state *st = (struct state *)*state;
+    const sr_datastore_t dss[] = {SR_DS_RUNNING, SR_DS_STARTUP};
+    sr_session_ctx_t *sess;
+    sr_subscription_ctx_t *sub;
+    uint32_t changes, d, i;
+    char *stored, *now;
+
+    dl_clear(st);
+    dl_load(st, RB_XML);
+    for (d = 0; d < sizeof dss / sizeof *dss; ++d) {
+        assert_int_equal(SR_ERR_OK, sr_session_start(st->conn, dss[d], &sess));
+        if (dss[d] == SR_DS_STARTUP) {
+            assert_int_equal(SR_ERR_OK, sr_copy_config(sess, NULL, SR_DS_RUNNING, 0));
+        }
+        changes = 0;
+        sub = NULL;
+        assert_int_equal(SR_ERR_OK, sr_module_change_subscribe(sess, "dl", NULL, count_change_cb, &changes, 0, 0, &sub));
+        assert_int_equal(SR_ERR_OK, sr_module_change_subscribe(sess, "dm", NULL, count_change_cb, &changes, 0, 0, &sub));
+        stored = stored_xml(st, dss[d]);
+
+        for (i = 0; i < sizeof rb_cases / sizeof *rb_cases; ++i) {
+            print_message("[  CASE    ] %s, %s\n", rb_cases[i].name, (dss[d] == SR_DS_STARTUP) ? "startup" : "running");
+            apply_edits(sess, rb_cases[i].edits);
+            assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+            assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+            now = stored_xml(st, dss[d]);
+            assert_string_equal(stored, now);
+            free(now);
+        }
+        assert_int_equal(0, __atomic_load_n(&changes, __ATOMIC_SEQ_CST));
+
+        /* the datastore still takes a valid edit, and that one is heard */
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, DL_P "item[name='i3']/val",
+                (dss[d] == SR_DS_STARTUP) ? "s" : "r", NULL, 0));
+        assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+        assert_int_equal(1, __atomic_load_n(&changes, __ATOMIC_SEQ_CST));
+
+        free(stored);
+        sr_unsubscribe(sub);
+        sr_session_stop(sess);
+    }
+
+    dl_clear(st);
+    assert_int_equal(SR_ERR_OK, sr_session_start(st->conn, SR_DS_STARTUP, &sess));
+    assert_int_equal(SR_ERR_OK, sr_copy_config(sess, NULL, SR_DS_RUNNING, 0));
+    sr_session_stop(sess);
+}
+
+/**
+ * @brief Replace the stored running data of module @p mod_name without sysrepo and without validation, the way
+ * running is copied from startup on boot or a tool writes the file.
+ */
+static void
+write_running(struct state *st, const char *mod_name, const char *xml)
+{
+    const struct ly_ctx *ctx;
+    struct lyd_node *tree = NULL;
+    const char *dir, *prefix;
+    char *path;
+
+    dir = getenv(SR_SHM_PATH_ENV) ? getenv(SR_SHM_PATH_ENV) : SR_SHM_PATH;
+    prefix = getenv(SR_SHM_PREFIX_ENV) ? getenv(SR_SHM_PREFIX_ENV) : SR_SHM_PREFIX_DEFAULT;
+    assert_int_not_equal(-1, asprintf(&path, "%s/%s_%s.running", dir, prefix, mod_name));
+
+    ctx = sr_acquire_context(st->conn);
+    assert_non_null(ctx);
+    assert_int_equal(LY_SUCCESS, lyd_parse_data_mem(ctx, xml, LYD_XML, LYD_PARSE_ONLY | LYD_PARSE_STRICT, 0, &tree));
+    assert_int_equal(LY_SUCCESS, lyd_print_path(path, tree, LYD_JSON, LYD_PRINT_WITHSIBLINGS | LYD_PRINT_SHRINK |
+            LYD_PRINT_KEEPEMPTYCONT | LYD_PRINT_WD_IMPL_TAG));
+    lyd_free_all(tree);
+    sr_release_context(st->conn);
+    free(path);
+}
+
+/*
+ * Stored data that no connection validated, here a reader that points at nothing, are found by the first change of
+ * the module on a new connection however unrelated the change is, and once the data are repaired the later changes
+ * are validated incrementally again.
+ */
+static void
+test_unvalidated_stored(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_R("r", "<lref>i1</lref>")));
+    write_running(st, "dl", DL_T(DL_I("i1", "a") DL_R("r", "<lref>i7</lref>")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+
+    /* the repair is validated in full as well */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, DL_P "r[name='r']/lref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+    assert_int_equal(calls, incr_calls());
+
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+}
+
+static void
+check_revision(struct state *st, const char *revision)
+{
+    const struct ly_ctx *ctx;
+    const struct lys_module *mod;
+
+    ctx = sr_acquire_context(st->conn);
+    assert_non_null(ctx);
+    mod = ly_ctx_get_module_implemented(ctx, "incr-u");
+    assert_non_null(mod);
+    assert_string_equal(revision, mod->revision);
+    sr_release_context(st->conn);
+}
+
+/*
+ * A schema change over stored data, a new revision or a deviation that adds a rule: it is refused while the stored
+ * data break the new rule, and once in place the incremental edits are checked against it.
+ */
+static void
+test_schema_upgrade(void **state)
+{
+    struct state *st = (struct state *)*state;
+    const char *ud[] = {TESTS_SRC_DIR "/files/incr-ud.yang", NULL};
+    const char *mods[] = {"incr-ud", "incr-u", NULL};
+    uint64_t calls;
+
+    assert_int_equal(SR_ERR_OK, sr_install_module(st->conn, TESTS_SRC_DIR "/files/incr-u@2026-01-01.yang", NULL, NULL));
+    set_item(st, "/incr-u:u/item[name='a']/val", "v1");
+    set_item(st, "/incr-u:u/item[name='b']/val", "v1");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+
+    /* the new revision wants unique values */
+    assert_int_not_equal(SR_ERR_OK, sr_update_module(st->conn, TESTS_SRC_DIR "/files/incr-u@2026-02-01.yang",
+            TESTS_SRC_DIR "/files"));
+    check_revision(st, "2026-01-01");
+    set_item(st, "/incr-u:u/item[name='b']/val", "v2");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_update_module(st->conn, TESTS_SRC_DIR "/files/incr-u@2026-02-01.yang",
+            TESTS_SRC_DIR "/files"));
+    check_revision(st, "2026-02-01");
+
+    /* the first edit on the new context is validated in full, the next one incrementally */
+    set_item(st, "/incr-u:u/item[name='c']/val", "v3");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    calls = incr_calls();
+    set_item(st, "/incr-u:u/item[name='d']/val", "v1");
+    apply_rejected(st);
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    /* the deviation wants short values */
+    set_item(st, "/incr-u:u/item[name='a']/val", "long");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    assert_int_not_equal(SR_ERR_OK, sr_install_modules(st->conn, ud, TESTS_SRC_DIR "/files", NULL));
+    set_item(st, "/incr-u:u/item[name='a']/val", "v1");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_install_modules(st->conn, ud, TESTS_SRC_DIR "/files", NULL));
+
+    set_item(st, "/incr-u:u/item[name='e']/val", "v5");
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    calls = incr_calls();
+    set_item(st, "/incr-u:u/item[name='e']/val", "long");
+    apply_rejected(st);
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    assert_int_equal(SR_ERR_OK, sr_remove_modules(st->conn, mods, 0));
+}
+
 int
 main(void)
 {
@@ -1173,8 +1520,12 @@ main(void)
         cmocka_unit_test_teardown(test_delete_yang_probe, clear_data),
         cmocka_unit_test_teardown(test_add_relative_readers, clear_data),
         cmocka_unit_test_teardown(test_modify_rules, clear_data),
+        cmocka_unit_test_teardown(test_key_change, clear_data),
         cmocka_unit_test_teardown(test_product_shapes, clear_data),
         cmocka_unit_test_teardown(test_gap_shapes, clear_data),
+        cmocka_unit_test_teardown(test_rollback, clear_data),
+        cmocka_unit_test_teardown(test_unvalidated_stored, clear_data),
+        cmocka_unit_test_teardown(test_schema_upgrade, clear_data),
     };
 
     setenv("CMOCKA_TEST_ABORT", "1", 1);

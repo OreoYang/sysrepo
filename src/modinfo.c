@@ -3372,6 +3372,48 @@ sr_modinfo_validate_incr(const struct sr_mod_info_s *mod_info, int diff_is_compl
 #endif
 }
 
+/**
+ * @brief Whether this connection already validated the stored data of a module in full since its context was created.
+ *
+ * Incremental validation trusts the stored data. Running copied from startup on boot, data written around sysrepo
+ * and data left by an interrupted process have never been validated, so the first change of every module after
+ * a context is created is validated in full.
+ */
+static int
+sr_modinfo_val_full_known(sr_conn_ctx_t *conn, const struct lys_module *ly_mod, sr_datastore_t ds)
+{
+    sr_error_info_t *err_info = NULL;
+    int known;
+
+    if ((err_info = sr_mlock(&conn->val_full_lock, -1, __func__, NULL, NULL))) {
+        sr_errinfo_free(&err_info);
+        return 0;
+    }
+    known = ly_set_contains(&conn->val_full[ds], (void *)ly_mod, NULL);
+    sr_munlock(&conn->val_full_lock);
+
+    return known;
+}
+
+void
+sr_modinfo_val_full_stored(struct sr_mod_info_s *mod_info)
+{
+    sr_error_info_t *err_info = NULL;
+    uint32_t i;
+
+    if ((err_info = sr_mlock(&mod_info->conn->val_full_lock, -1, __func__, NULL, NULL))) {
+        sr_errinfo_free(&err_info);
+        return;
+    }
+    for (i = 0; i < mod_info->mod_count; ++i) {
+        if (mod_info->mods[i].state & MOD_INFO_VAL_FULL) {
+            /* not remembering it only costs another full validation */
+            ly_set_add(&mod_info->conn->val_full[mod_info->ds], (void *)mod_info->mods[i].ly_mod, 0, NULL);
+        }
+    }
+    sr_munlock(&mod_info->conn->val_full_lock);
+}
+
 void
 sr_validate_incr_status_log(void)
 {
@@ -3441,8 +3483,15 @@ sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff
     for (i = 0; i < mod_info->mod_count; ++i) {
         mod = &mod_info->mods[i];
         if (mod->state & mod_state) {
+            if (incr && !sr_modinfo_val_full_known(mod_info->conn, mod->ly_mod, mod_info->ds)) {
+                /* Stored data may have been loaded from startup or written outside sysrepo without validation. */
+                mod->state |= MOD_INFO_VAL_FULL;
+                SR_LOG_DBG("Full validation baseline for module \"%s\" in \"%s\" datastore.",
+                        mod->ly_mod->name, sr_ds2str(mod_info->ds));
+            }
+
             /* validate this module */
-            if (incr) {
+            if (incr && !(mod->state & MOD_INFO_VAL_FULL)) {
                 /* re-read the diff every time, merging the validation diff into it can move its first sibling */
                 tmp_err = sr_lyd_validate_module_incr(&mod_info->data, mod->ly_mod, mod_info->notify_diff,
                         val_opts | LYD_VALIDATE_NOT_FINAL, &diff);
@@ -3484,7 +3533,7 @@ sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff
     for (i = 0; i < mod_info->mod_count; ++i) {
         mod = &mod_info->mods[i];
         if (mod->state & mod_state) {
-            if (incr) {
+            if (incr && !(mod->state & MOD_INFO_VAL_FULL)) {
                 tmp_err = sr_lyd_validate_module_incr_final(mod_info->data, mod->ly_mod, mod_info->notify_diff, val_opts);
             } else {
                 tmp_err = sr_lyd_validate_module_final(mod_info->data, mod->ly_mod, val_opts);

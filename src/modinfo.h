@@ -37,6 +37,7 @@
 
 #define MOD_INFO_DATA       0x0100 /* module data were loaded */
 #define MOD_INFO_CHANGED    0x0200 /* module data were changed */
+#define MOD_INFO_VAL_FULL   0x0400 /* module data were validated in full, not incrementally */
 
 /**
  * @brief Mod info structure, used for keeping all relevant modules for a data operation.
@@ -288,6 +289,15 @@ void sr_validate_incr_status_log(void);
 
 sr_error_info_t *sr_modinfo_validate(struct sr_mod_info_s *mod_info, uint32_t mod_state, int diff_is_complete,
         int finish_diff, sr_error_info_t **val_err_info);
+
+/**
+ * @brief Remember the modules validated in full, once their data are stored, so that later changes of them may be
+ * validated incrementally. The baseline is established lazily on the first relevant commit for each module and
+ * datastore on a connection.
+ *
+ * @param[in] mod_info Mod info with stored data.
+ */
+void sr_modinfo_val_full_stored(struct sr_mod_info_s *mod_info);
 
 /**
  * @brief Add default values into data for modules in mod info.

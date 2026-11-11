@@ -168,6 +168,10 @@ struct sr_conn_ctx_s {
     } *oper_caches;                 /**< Operational get subscription data caches. */
     uint32_t oper_cache_count;      /**< Operational get subscription data cache count. */
     sr_rwlock_t oper_cache_lock;    /**< Operational get subscription data cache lock. */
+
+    struct ly_set val_full[SR_DS_READ_COUNT];   /**< Modules whose stored data this connection validated in full and
+                                                     stored since its context was created, per datastore. */
+    pthread_mutex_t val_full_lock;  /**< Session-shared lock for accessing ::sr_conn_ctx_s.val_full. */
 };
 
 /**
