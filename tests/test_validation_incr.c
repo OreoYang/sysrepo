@@ -1430,6 +1430,114 @@ test_unvalidated_stored(void **state)
     dl_clear(st);
 }
 
+/*
+ * The baseline belongs to a connection: a connection that has not validated the module yet validates in full even
+ * when another connection has already done it. Each edit here is valid and unrelated to the dangling reader, so the
+ * only way to see the dirty data is a full validation; the counter of incremental calls tells which one ran.
+ */
+static void
+test_baseline_per_connection(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn_a, *conn_b;
+    sr_session_ctx_t *sess_a, *sess_b;
+    uint64_t calls;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_R("r", "<lref>i1</lref>")));
+    write_running(st, "dl", DL_T(DL_I("i1", "a") DL_R("r", "<lref>i7</lref>")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn_a));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn_a, SR_DS_RUNNING, &sess_a));
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn_b));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn_b, SR_DS_RUNNING, &sess_b));
+
+    /* both connections see the dirty data on their first edit */
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_a, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess_a, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess_a));
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_b, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess_b, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess_b));
+    assert_int_equal(calls, incr_calls());
+
+    /* A repairs the data (in full) and then edits incrementally */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_a, DL_P "r[name='r']/lref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess_a, 0));
+    assert_int_equal(calls, incr_calls());
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_a, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess_a, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#endif
+    calls = incr_calls();
+
+    /* B has no baseline of its own, its first successful edit is in full, the next one is incremental */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_b, "/dl:c-neg/un[name='a']/u", "u2", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess_b, 0));
+    assert_int_equal(calls, incr_calls());
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess_b, "/dl:c-neg/un[name='a']/u", "u3", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess_b, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    sr_session_stop(sess_b);
+    sr_disconnect(conn_b);
+    sr_session_stop(sess_a);
+    sr_disconnect(conn_a);
+    dl_clear(st);
+}
+
+/*
+ * A schema change drops the context of every connection, so the baseline of a connection is gone with it: data that
+ * became dirty after the baseline are found by the first edit made after the change.
+ */
+static void
+test_baseline_context_switch(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_R("r", "<lref>i1</lref>")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    /* the baseline of this connection */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+
+    /* another connection changes the schema (it validates the stored data, so it must run while they are valid) */
+    assert_int_equal(SR_ERR_OK, sr_install_module(st->conn, TESTS_SRC_DIR "/files/incr-u@2026-01-01.yang", NULL, NULL));
+
+    /* the data become dirty behind sysrepo; this connection still holds its old context until its next call */
+    write_running(st, "dl", DL_T(DL_I("i1", "a") DL_R("r", "<lref>i7</lref>")));
+
+    /* the first edit after the change is validated in full again */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u2", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+    assert_int_equal(SR_ERR_OK, sr_remove_module(st->conn, "incr-u", 0));
+}
+
 static void
 check_revision(struct state *st, const char *revision)
 {
@@ -1525,6 +1633,8 @@ main(void)
         cmocka_unit_test_teardown(test_gap_shapes, clear_data),
         cmocka_unit_test_teardown(test_rollback, clear_data),
         cmocka_unit_test_teardown(test_unvalidated_stored, clear_data),
+        cmocka_unit_test_teardown(test_baseline_per_connection, clear_data),
+        cmocka_unit_test_teardown(test_baseline_context_switch, clear_data),
         cmocka_unit_test_teardown(test_schema_upgrade, clear_data),
     };
 
