@@ -1538,6 +1538,202 @@ test_baseline_context_switch(void **state)
     assert_int_equal(SR_ERR_OK, sr_remove_module(st->conn, "incr-u", 0));
 }
 
+/*
+ * The baseline is kept per module: dm reads dl but is not validated together with it when only dm changes, so the
+ * first change of dm says nothing about the dangling reader of dl. The first change of dl on the same connection is
+ * still validated in full and finds it, the dirty data in dl cannot be seen by an edit that does not touch it.
+ */
+static void
+test_baseline_per_module(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_R("r", "<lref>i1</lref>")));
+    write_running(st, "dl", DL_T(DL_I("i1", "a") DL_R("r", "<lref>i7</lref>")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    /* the baseline of dm only, the dirty reader belongs to dl */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m1']", NULL, NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+
+    /* dl has no baseline yet, so this unrelated edit is validated in full and rejected */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+
+    /* the repair of dl is validated in full, and then dl is incremental as well */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, DL_P "r[name='r']/lref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+}
+
+/*
+ * An edit of dl validates dm as well, because dm reads dl, and dm has no baseline either: its dangling reader is found
+ * by an edit of dl that has nothing to do with it. Once dm is repaired, dl and dm are both incremental.
+ */
+static void
+test_baseline_inverse_dep(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a")));
+    write_running(st, "dm", DM_M("<iref>zz</iref>"));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    /* dl and dm are both validated in full, so no incremental call can have happened */
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+    assert_int_equal(calls, incr_calls());
+
+    /* the repair of dm, and an edit of dl that now finds dm clean */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m1']/iref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+
+    /* both modules have a baseline now */
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u2", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+}
+
+/*
+ * One commit that changes two modules sets the baseline of both: the next edit of either of them is incremental.
+ */
+static void
+test_baseline_multi_module_commit(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m1']/iref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+
+    /* dl alone */
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u2", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    /* dm alone */
+    calls = incr_calls();
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m2']/iref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+    assert_true(incr_calls() > calls);
+#else
+    assert_int_equal(calls, incr_calls());
+#endif
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+}
+
+/*
+ * A rejected commit that changes two modules sets the baseline of neither, one of them failing is enough to keep both
+ * validated in full, so the same commit is rejected again and again, with no incremental call in between.
+ */
+static void
+test_baseline_multi_module_rejected(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+    int i;
+
+    if (strcmp(SR_DEFAULT_RUNNING_DS, "JSON DS file")) {
+        skip();
+    }
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_R("r", "<lref>i1</lref>")));
+    write_running(st, "dl", DL_T(DL_I("i1", "a") DL_R("r", "<lref>i7</lref>")));
+
+    assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+    assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+
+    calls = incr_calls();
+    for (i = 0; i < 3; ++i) {
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m1']/iref", "i1", NULL, 0));
+        assert_int_equal(SR_ERR_VALIDATION_FAILED, sr_apply_changes(sess, 0));
+        assert_int_equal(SR_ERR_OK, sr_discard_changes(sess));
+        assert_int_equal(calls, incr_calls());
+    }
+
+    /* once dl is repaired, the same commit goes through */
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, DL_P "r[name='r']/lref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dm:mtop/mr[name='m1']/iref", "i1", NULL, 0));
+    assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+
+    sr_session_stop(sess);
+    sr_disconnect(conn);
+    dl_clear(st);
+}
+
 static void
 check_revision(struct state *st, const char *revision)
 {
@@ -1635,6 +1831,10 @@ main(void)
         cmocka_unit_test_teardown(test_unvalidated_stored, clear_data),
         cmocka_unit_test_teardown(test_baseline_per_connection, clear_data),
         cmocka_unit_test_teardown(test_baseline_context_switch, clear_data),
+        cmocka_unit_test_teardown(test_baseline_per_module, clear_data),
+        cmocka_unit_test_teardown(test_baseline_inverse_dep, clear_data),
+        cmocka_unit_test_teardown(test_baseline_multi_module_commit, clear_data),
+        cmocka_unit_test_teardown(test_baseline_multi_module_rejected, clear_data),
         cmocka_unit_test_teardown(test_schema_upgrade, clear_data),
     };
 
