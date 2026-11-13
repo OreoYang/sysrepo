@@ -18,10 +18,12 @@
 #define _GNU_SOURCE
 
 #include <setjmp.h>
+#include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <cmocka.h>
@@ -1748,6 +1750,133 @@ check_revision(struct state *st, const char *revision)
     sr_release_context(st->conn);
 }
 
+/**
+ * @brief Body of the child of test_crash_during_apply(), it commits two modules over and over until it is killed.
+ *
+ * It never returns and uses no cmocka assert (a failed one would jump into the test runner of the parent copy), a
+ * failure is its exit status. Every commit is valid: dl item i3 and the dm reader of dl items switch between two
+ * valid states, so whatever the kill leaves behind has to be one of those states.
+ *
+ * @param[in] ready_fd Pipe end that gets a byte after the first commit.
+ */
+static void
+crash_child(int ready_fd)
+{
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint32_t n = 0;
+    char ready = 1;
+
+    if (sr_connect(0, &conn) != SR_ERR_OK) {
+        _exit(1);
+    }
+    if (sr_session_start(conn, SR_DS_RUNNING, &sess) != SR_ERR_OK) {
+        _exit(1);
+    }
+
+    for ( ; ; ++n) {
+        if (sr_set_item_str(sess, DL_P "item[name='i3']/val", (n & 1) ? "b" : "a", NULL, 0) ||
+                sr_set_item_str(sess, "/dm:mtop/mr[name='m1']/iref", (n & 1) ? "i2" : "i1", NULL, 0) ||
+                sr_apply_changes(sess, 0)) {
+            _exit(2);
+        }
+        if (!n && (write(ready_fd, &ready, 1) != 1)) {
+            _exit(3);
+        }
+    }
+}
+
+/**
+ * @brief Value of the leaf @p path in the running datastore as seen by @p sess, it has to exist.
+ */
+static void
+running_leaf(sr_session_ctx_t *sess, const char *path, char *buf, size_t size)
+{
+    sr_val_t *val = NULL;
+
+    assert_int_equal(SR_ERR_OK, sr_get_item(sess, path, 0, &val));
+    assert_non_null(val);
+    snprintf(buf, size, "%s", val->data.string_val);
+    sr_free_val(val);
+}
+
+/*
+ * A process killed in the middle of sr_apply_changes() (SIGKILL, no cleanup of any kind) leaves the stored data whole,
+ * every module in one of the states a commit produces, and the next connection finds them valid. The kill happens at
+ * a different moment in every round, so some land before, some during and some after the store of a module; which
+ * one cannot be told from the outside and does not have to be. A dead connection does not leave a baseline behind:
+ * the first change of a module on a new connection is validated in full, the next one incrementally. The connection
+ * that was there all along still commits afterwards.
+ *
+ * This is a process crash, the page cache survives it. A power cut that loses writes is not simulated, that depends
+ * on the storage and not on the validation.
+ */
+static void
+test_crash_during_apply(void **state)
+{
+    struct state *st = (struct state *)*state;
+    sr_conn_ctx_t *conn;
+    sr_session_ctx_t *sess;
+    uint64_t calls;
+    uint32_t round;
+    pid_t pid;
+    int fds[2], status;
+    char ready, val[16];
+
+    dl_clear(st);
+    dl_load(st, DL_T(DL_I("i1", "a") DL_I("i2", "b") DL_I("i3", "a") DL_R("r", "<lref>i1</lref>"))
+            DM_M("<iref>i1</iref>"));
+
+    for (round = 0; round < 15; ++round) {
+        assert_int_equal(0, pipe(fds));
+        pid = fork();
+        assert_int_not_equal(-1, pid);
+        if (!pid) {
+            close(fds[0]);
+            crash_child(fds[1]);
+        }
+        close(fds[1]);
+
+        /* the child committed at least once, kill it after a growing delay */
+        assert_int_equal(1, read(fds[0], &ready, 1));
+        close(fds[0]);
+        usleep(round * 700);
+        assert_int_equal(0, kill(pid, SIGKILL));
+        assert_int_equal(pid, waitpid(pid, &status, 0));
+        assert_true(WIFSIGNALED(status) && (WTERMSIG(status) == SIGKILL));
+
+        /* a new connection sees whole and valid data */
+        assert_int_equal(SR_ERR_OK, sr_connect(0, &conn));
+        assert_int_equal(SR_ERR_OK, sr_session_start(conn, SR_DS_RUNNING, &sess));
+        running_leaf(sess, DL_P "item[name='i3']/val", val, sizeof val);
+        assert_true(!strcmp(val, "a") || !strcmp(val, "b"));
+        running_leaf(sess, "/dm:mtop/mr[name='m1']/iref", val, sizeof val);
+        assert_true(!strcmp(val, "i1") || !strcmp(val, "i2"));
+        assert_int_equal(SR_ERR_OK, sr_validate(sess, NULL, 0));
+
+        /* no baseline survives: the first change is in full, the next one incremental */
+        calls = incr_calls();
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u1", NULL, 0));
+        assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+        assert_int_equal(calls, incr_calls());
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(sess, "/dl:c-neg/un[name='a']/u", "u2", NULL, 0));
+        assert_int_equal(SR_ERR_OK, sr_apply_changes(sess, 0));
+#ifdef ENABLE_VALIDATE_INCREMENTAL
+        assert_true(incr_calls() > calls);
+#else
+        assert_int_equal(calls, incr_calls());
+#endif
+        sr_session_stop(sess);
+        sr_disconnect(conn);
+
+        /* the connection that outlived the crash still commits */
+        assert_int_equal(SR_ERR_OK, sr_set_item_str(st->sess, DL_P "item[name='i3']/val", "c", NULL, 0));
+        assert_int_equal(SR_ERR_OK, sr_apply_changes(st->sess, 0));
+    }
+
+    dl_clear(st);
+}
+
 /*
  * A schema change over stored data, a new revision or a deviation that adds a rule: it is refused while the stored
  * data break the new rule, and once in place the incremental edits are checked against it.
@@ -1835,6 +1964,7 @@ main(void)
         cmocka_unit_test_teardown(test_baseline_inverse_dep, clear_data),
         cmocka_unit_test_teardown(test_baseline_multi_module_commit, clear_data),
         cmocka_unit_test_teardown(test_baseline_multi_module_rejected, clear_data),
+        cmocka_unit_test_teardown(test_crash_during_apply, clear_data),
         cmocka_unit_test_teardown(test_schema_upgrade, clear_data),
     };
 
